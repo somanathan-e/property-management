@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.amenity.mappers.AmenityMapper">
+    <sql id="amenityColumns">a.id, a.property_id, p.property_code, a.amenity_code, a.amenity_name, a.category, a.status</sql>
+    <select id="findPage" resultType="com.eba.amenity.dto.AmenityDto">SELECT <include refid="amenityColumns" /> FROM amenity a INNER JOIN property p ON p.id = a.property_id WHERE a.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(a.amenity_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(a.amenity_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(a.category) LIKE CONCAT('%', LOWER(#{search}), '%'))</if> ORDER BY a.id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM amenity a WHERE a.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(a.amenity_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(a.amenity_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(a.category) LIKE CONCAT('%', LOWER(#{search}), '%'))</if></select>
+    <select id="findById" parameterType="long" resultType="com.eba.amenity.dto.AmenityDto">SELECT <include refid="amenityColumns" /> FROM amenity a INNER JOIN property p ON p.id = a.property_id WHERE a.id = #{id} AND a.is_deleted = FALSE</select>
+    <select id="findByCode" parameterType="string" resultType="com.eba.amenity.dto.AmenityDto">SELECT <include refid="amenityColumns" /> FROM amenity a INNER JOIN property p ON p.id = a.property_id WHERE a.amenity_code = #{amenityCode} AND a.is_deleted = FALSE</select>
+    <insert id="insert" parameterType="com.eba.amenity.dto.AmenityUpsertDto">INSERT INTO amenity (tenant_id, property_id, amenity_code, amenity_name, category, status) VALUES (1, #{propertyId}, #{amenityCode}, #{amenityName}, #{category}, #{status})</insert>
+    <update id="update">UPDATE amenity SET property_id = #{request.propertyId}, amenity_code = #{request.amenityCode}, amenity_name = #{request.amenityName}, category = #{request.category}, status = #{request.status}, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+    <update id="softDelete" parameterType="long">UPDATE amenity SET is_deleted = TRUE, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+</mapper>
+

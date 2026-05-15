@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.property.mappers.PropertyMapper">
+    <sql id="propertyColumns">
+        id, property_code, property_name, property_type, city, status
+    </sql>
+
+    <select id="findPage" resultType="com.eba.property.dto.PropertyDto">
+        SELECT <include refid="propertyColumns" />
+        FROM property
+        WHERE is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(property_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(property_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(city) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM property
+        WHERE is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(property_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(property_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(city) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+    </select>
+
+    <select id="findById" parameterType="long" resultType="com.eba.property.dto.PropertyDto">
+        SELECT <include refid="propertyColumns" />
+        FROM property
+        WHERE id = #{id} AND is_deleted = FALSE
+    </select>
+
+    <select id="findByCode" parameterType="string" resultType="com.eba.property.dto.PropertyDto">
+        SELECT <include refid="propertyColumns" />
+        FROM property
+        WHERE property_code = #{propertyCode} AND is_deleted = FALSE
+    </select>
+
+    <insert id="insert" parameterType="com.eba.property.dto.PropertyUpsertDto">
+        INSERT INTO property (tenant_id, property_code, property_name, property_type, city, status)
+        VALUES (1, #{propertyCode}, #{propertyName}, #{propertyType}, #{city}, #{status})
+    </insert>
+
+    <update id="update">
+        UPDATE property
+        SET property_code = #{request.propertyCode},
+            property_name = #{request.propertyName},
+            property_type = #{request.propertyType},
+            city = #{request.city},
+            status = #{request.status},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="softDelete" parameterType="long">
+        UPDATE property
+        SET is_deleted = TRUE,
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+</mapper>

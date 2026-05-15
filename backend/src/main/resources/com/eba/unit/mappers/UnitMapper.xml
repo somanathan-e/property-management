@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.unit.mappers.UnitMapper">
+    <sql id="unitColumns">u.id, u.property_id, p.property_code, u.tower_id, t.tower_code, u.unit_code, u.unit_name, u.unit_type, u.occupancy_status, u.status</sql>
+    <select id="findPage" resultType="com.eba.unit.dto.UnitDto">
+        SELECT <include refid="unitColumns" /> FROM unit_master u INNER JOIN property p ON p.id = u.property_id INNER JOIN tower t ON t.id = u.tower_id
+        WHERE u.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(u.unit_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(u.occupancy_status) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(t.tower_code) LIKE CONCAT('%', LOWER(#{search}), '%'))
+        </if>
+        ORDER BY u.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM unit_master u INNER JOIN tower t ON t.id = u.tower_id WHERE u.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(u.unit_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(u.occupancy_status) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(t.tower_code) LIKE CONCAT('%', LOWER(#{search}), '%'))</if></select>
+    <select id="findById" parameterType="long" resultType="com.eba.unit.dto.UnitDto">SELECT <include refid="unitColumns" /> FROM unit_master u INNER JOIN property p ON p.id = u.property_id INNER JOIN tower t ON t.id = u.tower_id WHERE u.id = #{id} AND u.is_deleted = FALSE</select>
+    <select id="findByCode" parameterType="string" resultType="com.eba.unit.dto.UnitDto">SELECT <include refid="unitColumns" /> FROM unit_master u INNER JOIN property p ON p.id = u.property_id INNER JOIN tower t ON t.id = u.tower_id WHERE u.unit_code = #{unitCode} AND u.is_deleted = FALSE</select>
+    <insert id="insert" parameterType="com.eba.unit.dto.UnitUpsertDto">INSERT INTO unit_master (tenant_id, property_id, tower_id, unit_code, unit_name, unit_type, occupancy_status, status) VALUES (1, #{propertyId}, #{towerId}, #{unitCode}, #{unitName}, #{unitType}, #{occupancyStatus}, #{status})</insert>
+    <update id="update">UPDATE unit_master SET property_id = #{request.propertyId}, tower_id = #{request.towerId}, unit_code = #{request.unitCode}, unit_name = #{request.unitName}, unit_type = #{request.unitType}, occupancy_status = #{request.occupancyStatus}, status = #{request.status}, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+    <update id="softDelete" parameterType="long">UPDATE unit_master SET is_deleted = TRUE, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+</mapper>
+

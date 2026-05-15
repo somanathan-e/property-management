@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.contact.mappers.ContactMapper">
+    <sql id="contactColumns">ct.id, ct.customer_id, c.customer_code, ct.contact_code, ct.full_name, ct.email, ct.phone, ct.role_title, ct.status</sql>
+    <select id="findPage" resultType="com.eba.contact.dto.ContactDto">SELECT <include refid="contactColumns" /> FROM contact ct INNER JOIN customer c ON c.id = ct.customer_id WHERE ct.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(ct.contact_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(ct.full_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(ct.role_title) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(c.customer_code) LIKE CONCAT('%', LOWER(#{search}), '%'))</if> ORDER BY ct.id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM contact ct INNER JOIN customer c ON c.id = ct.customer_id WHERE ct.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(ct.contact_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(ct.full_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(ct.role_title) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(c.customer_code) LIKE CONCAT('%', LOWER(#{search}), '%'))</if></select>
+    <select id="findById" parameterType="long" resultType="com.eba.contact.dto.ContactDto">SELECT <include refid="contactColumns" /> FROM contact ct INNER JOIN customer c ON c.id = ct.customer_id WHERE ct.id = #{id} AND ct.is_deleted = FALSE</select>
+    <select id="findByCode" parameterType="string" resultType="com.eba.contact.dto.ContactDto">SELECT <include refid="contactColumns" /> FROM contact ct INNER JOIN customer c ON c.id = ct.customer_id WHERE ct.contact_code = #{contactCode} AND ct.is_deleted = FALSE</select>
+    <insert id="insert" parameterType="com.eba.contact.dto.ContactUpsertDto">INSERT INTO contact (tenant_id, customer_id, contact_code, full_name, email, phone, role_title, status) VALUES (1, #{customerId}, #{contactCode}, #{fullName}, #{email}, #{phone}, #{roleTitle}, #{status})</insert>
+    <update id="update">UPDATE contact SET customer_id = #{request.customerId}, contact_code = #{request.contactCode}, full_name = #{request.fullName}, email = #{request.email}, phone = #{request.phone}, role_title = #{request.roleTitle}, status = #{request.status}, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+    <update id="softDelete" parameterType="long">UPDATE contact SET is_deleted = TRUE, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+</mapper>
+

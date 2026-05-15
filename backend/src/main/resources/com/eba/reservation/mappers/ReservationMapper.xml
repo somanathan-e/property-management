@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.reservation.mappers.ReservationMapper">
+    <sql id="reservationColumns">
+        r.id,
+        r.reservation_number,
+        r.property_id,
+        p.property_name,
+        r.tower_id,
+        tw.tower_name,
+        r.unit_id,
+        u.unit_code,
+        u.unit_name,
+        r.customer_id,
+        c.customer_name,
+        r.reservation_status,
+        r.workflow_status,
+        r.payment_status,
+        CAST(r.reservation_date AS VARCHAR) AS reservation_date,
+        CAST(r.expiry_date AS VARCHAR) AS expiry_date,
+        r.quoted_rent,
+        r.currency,
+        r.deposit_amount,
+        r.created_by,
+        CAST(r.created_date AS VARCHAR) AS created_date,
+        r.converted_lease_id,
+        l.lease_number AS converted_lease_number,
+        r.notes
+    </sql>
+
+    <select id="findPage" resultType="com.eba.reservation.dto.ReservationDto">
+        SELECT <include refid="reservationColumns" />
+        FROM reservation r
+        INNER JOIN property p ON p.id = r.property_id
+        INNER JOIN tower tw ON tw.id = r.tower_id
+        INNER JOIN unit_master u ON u.id = r.unit_id
+        INNER JOIN customer c ON c.id = r.customer_id
+        LEFT JOIN pm_lease l ON l.id = r.converted_lease_id
+        WHERE r.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(r.reservation_number) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(p.property_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(c.customer_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        <if test="reservationStatus != null and reservationStatus != ''">
+            AND r.reservation_status = #{reservationStatus}
+        </if>
+        <if test="workflowStatus != null and workflowStatus != ''">
+            AND r.workflow_status = #{workflowStatus}
+        </if>
+        ORDER BY r.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM reservation r
+        INNER JOIN property p ON p.id = r.property_id
+        INNER JOIN unit_master u ON u.id = r.unit_id
+        INNER JOIN customer c ON c.id = r.customer_id
+        WHERE r.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(r.reservation_number) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(p.property_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(c.customer_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        <if test="reservationStatus != null and reservationStatus != ''">
+            AND r.reservation_status = #{reservationStatus}
+        </if>
+        <if test="workflowStatus != null and workflowStatus != ''">
+            AND r.workflow_status = #{workflowStatus}
+        </if>
+    </select>
+
+    <select id="findById" parameterType="long" resultType="com.eba.reservation.dto.ReservationDto">
+        SELECT <include refid="reservationColumns" />
+        FROM reservation r
+        INNER JOIN property p ON p.id = r.property_id
+        INNER JOIN tower tw ON tw.id = r.tower_id
+        INNER JOIN unit_master u ON u.id = r.unit_id
+        INNER JOIN customer c ON c.id = r.customer_id
+        LEFT JOIN pm_lease l ON l.id = r.converted_lease_id
+        WHERE r.id = #{id} AND r.is_deleted = FALSE
+    </select>
+
+    <select id="findByNumber" parameterType="string" resultType="com.eba.reservation.dto.ReservationDto">
+        SELECT <include refid="reservationColumns" />
+        FROM reservation r
+        INNER JOIN property p ON p.id = r.property_id
+        INNER JOIN tower tw ON tw.id = r.tower_id
+        INNER JOIN unit_master u ON u.id = r.unit_id
+        INNER JOIN customer c ON c.id = r.customer_id
+        LEFT JOIN pm_lease l ON l.id = r.converted_lease_id
+        WHERE r.reservation_number = #{reservationNumber} AND r.is_deleted = FALSE
+    </select>
+
+    <insert id="insert" parameterType="com.eba.reservation.dto.ReservationUpsertDto">
+        INSERT INTO reservation (
+            tenant_id, reservation_number, property_id, tower_id, unit_id, customer_id, reservation_status,
+            workflow_status, payment_status, reservation_date, expiry_date, quoted_rent, currency,
+            deposit_amount, created_by, notes
+        )
+        VALUES (
+            1, #{reservationNumber}, #{propertyId}, #{towerId}, #{unitId}, #{customerId}, #{reservationStatus},
+            #{workflowStatus}, #{paymentStatus}, #{reservationDate}, #{expiryDate}, #{quotedRent}, #{currency},
+            #{depositAmount}, #{createdBy}, #{notes}
+        )
+    </insert>
+
+    <update id="update">
+        UPDATE reservation
+        SET reservation_number = #{request.reservationNumber},
+            property_id = #{request.propertyId},
+            tower_id = #{request.towerId},
+            unit_id = #{request.unitId},
+            customer_id = #{request.customerId},
+            reservation_status = #{request.reservationStatus},
+            workflow_status = #{request.workflowStatus},
+            payment_status = #{request.paymentStatus},
+            reservation_date = #{request.reservationDate},
+            expiry_date = #{request.expiryDate},
+            quoted_rent = #{request.quotedRent},
+            currency = #{request.currency},
+            deposit_amount = #{request.depositAmount},
+            created_by = #{request.createdBy},
+            notes = #{request.notes},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="updateWorkflow">
+        UPDATE reservation
+        SET reservation_status = #{request.reservationStatus},
+            workflow_status = #{request.workflowStatus},
+            payment_status = #{request.paymentStatus},
+            notes = COALESCE(#{request.notes}, notes),
+            updated_by = #{request.updatedBy},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="markConverted">
+        UPDATE reservation
+        SET reservation_status = 'CONVERTED',
+            workflow_status = 'APPROVED',
+            converted_lease_id = #{leaseId},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="softDelete" parameterType="long">
+        UPDATE reservation
+        SET is_deleted = TRUE,
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <select id="countActiveReservationConflict" resultType="long">
+        SELECT COUNT(*)
+        FROM reservation
+        WHERE unit_id = #{unitId}
+          AND is_deleted = FALSE
+          AND reservation_status IN ('DRAFT', 'PENDING_PAYMENT', 'PENDING_APPROVAL', 'CONFIRMED')
+          <if test="excludeId != null">AND id != #{excludeId}</if>
+          AND reservation_date &lt;= #{expiryDate}
+          AND expiry_date &gt;= #{reservationDate}
+    </select>
+
+    <select id="countActiveLeaseConflict" resultType="long">
+        SELECT COUNT(*)
+        FROM pm_lease
+        WHERE unit_id = #{unitId}
+          AND is_deleted = FALSE
+          AND lease_status = 'ACTIVE'
+          AND start_date &lt;= #{endDate}
+          AND end_date &gt;= #{startDate}
+    </select>
+</mapper>

@@ -1,0 +1,270 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.lease.mappers.LeaseMapper">
+    <sql id="leaseColumns">
+        l.id,
+        l.lease_number,
+        l.property_id,
+        p.property_name,
+        l.tower_id,
+        tw.tower_name,
+        l.unit_id,
+        l.customer_id,
+        c.customer_name,
+        u.unit_code,
+        u.unit_name,
+        l.lease_type,
+        l.lease_status,
+        l.occupancy_status,
+        l.rent_amount,
+        l.currency,
+        l.security_deposit,
+        l.renewal_status,
+        l.parent_lease_id,
+        l.parent_lease_reference,
+        l.version_number,
+        l.created_by,
+        CAST(l.created_date AS VARCHAR) AS created_date,
+        l.request_initiator,
+        l.approval_status,
+        l.document_status,
+        l.payment_status,
+        l.registration_status,
+        l.handover_status,
+        l.settlement_status,
+        CAST(l.start_date AS VARCHAR) AS start_date,
+        CAST(l.end_date AS VARCHAR) AS end_date,
+        CAST(l.free_period_start AS VARCHAR) AS free_period_start,
+        CAST(l.free_period_end AS VARCHAR) AS free_period_end,
+        CAST(l.fit_out_period_start AS VARCHAR) AS fit_out_period_start,
+        CAST(l.fit_out_period_end AS VARCHAR) AS fit_out_period_end,
+        l.notes,
+        COALESCE((
+            SELECT t.transaction_type
+            FROM pm_lease_transaction t
+            WHERE t.lease_id = l.id AND t.is_deleted = FALSE
+            ORDER BY t.id DESC
+            LIMIT 1
+        ), 'LEASE') AS latest_transaction_type
+    </sql>
+
+    <select id="findPage" resultType="com.eba.lease.dto.LeaseDto">
+        SELECT <include refid="leaseColumns" />
+        FROM pm_lease l
+        INNER JOIN property p ON p.id = l.property_id
+        INNER JOIN tower tw ON tw.id = l.tower_id
+        INNER JOIN unit_master u ON u.id = l.unit_id
+        INNER JOIN customer c ON c.id = l.customer_id
+        WHERE l.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(l.lease_number) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(p.property_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(c.customer_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(l.lease_status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        <if test="leaseStatus != null and leaseStatus != ''">
+            AND l.lease_status = #{leaseStatus}
+        </if>
+        <if test="renewalStatus != null and renewalStatus != ''">
+            AND l.renewal_status = #{renewalStatus}
+        </if>
+        ORDER BY l.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM pm_lease l
+        INNER JOIN property p ON p.id = l.property_id
+        INNER JOIN unit_master u ON u.id = l.unit_id
+        INNER JOIN customer c ON c.id = l.customer_id
+        WHERE l.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(l.lease_number) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(p.property_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(c.customer_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(l.lease_status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        <if test="leaseStatus != null and leaseStatus != ''">
+            AND l.lease_status = #{leaseStatus}
+        </if>
+        <if test="renewalStatus != null and renewalStatus != ''">
+            AND l.renewal_status = #{renewalStatus}
+        </if>
+    </select>
+
+    <select id="findById" parameterType="long" resultType="com.eba.lease.dto.LeaseDto">
+        SELECT <include refid="leaseColumns" />
+        FROM pm_lease l
+        INNER JOIN property p ON p.id = l.property_id
+        INNER JOIN tower tw ON tw.id = l.tower_id
+        INNER JOIN unit_master u ON u.id = l.unit_id
+        INNER JOIN customer c ON c.id = l.customer_id
+        WHERE l.id = #{id} AND l.is_deleted = FALSE
+    </select>
+
+    <select id="findByLeaseNumber" parameterType="string" resultType="com.eba.lease.dto.LeaseDto">
+        SELECT <include refid="leaseColumns" />
+        FROM pm_lease l
+        INNER JOIN property p ON p.id = l.property_id
+        INNER JOIN tower tw ON tw.id = l.tower_id
+        INNER JOIN unit_master u ON u.id = l.unit_id
+        INNER JOIN customer c ON c.id = l.customer_id
+        WHERE l.lease_number = #{leaseNumber} AND l.is_deleted = FALSE
+    </select>
+
+    <select id="countActiveLeaseConflict" resultType="long">
+        SELECT COUNT(*)
+        FROM pm_lease
+        WHERE unit_id = #{unitId}
+          AND is_deleted = FALSE
+          AND lease_status = 'ACTIVE'
+          <if test="excludeId != null">AND id != #{excludeId}</if>
+          AND start_date &lt;= #{endDate}
+          AND end_date &gt;= #{startDate}
+    </select>
+
+    <insert id="insert" parameterType="com.eba.lease.dto.LeaseUpsertDto">
+        INSERT INTO pm_lease (
+            tenant_id, lease_number, property_id, tower_id, unit_id, customer_id, lease_type, lease_status, occupancy_status,
+            currency, rent_amount, security_deposit, renewal_status, request_initiator, approval_status, document_status,
+            payment_status, registration_status, handover_status, settlement_status, start_date, end_date, free_period_start,
+            free_period_end, fit_out_period_start, fit_out_period_end, created_by, notes
+        )
+        VALUES (
+            1, #{leaseNumber}, #{propertyId}, #{towerId}, #{unitId}, #{customerId}, #{leaseType}, #{leaseStatus}, #{occupancyStatus},
+            #{currency}, #{rentAmount}, #{securityDeposit}, #{renewalStatus}, #{requestInitiator}, #{approvalStatus}, #{documentStatus},
+            #{paymentStatus}, #{registrationStatus}, #{handoverStatus}, #{settlementStatus}, #{startDate}, #{endDate}, #{freePeriodStart},
+            #{freePeriodEnd}, #{fitOutPeriodStart}, #{fitOutPeriodEnd}, #{createdBy}, #{notes}
+        )
+    </insert>
+
+    <update id="update">
+        UPDATE pm_lease
+        SET lease_number = #{request.leaseNumber},
+            property_id = #{request.propertyId},
+            tower_id = #{request.towerId},
+            unit_id = #{request.unitId},
+            customer_id = #{request.customerId},
+            lease_type = #{request.leaseType},
+            lease_status = #{request.leaseStatus},
+            occupancy_status = #{request.occupancyStatus},
+            currency = #{request.currency},
+            rent_amount = #{request.rentAmount},
+            security_deposit = #{request.securityDeposit},
+            renewal_status = #{request.renewalStatus},
+            request_initiator = #{request.requestInitiator},
+            approval_status = #{request.approvalStatus},
+            document_status = #{request.documentStatus},
+            payment_status = #{request.paymentStatus},
+            registration_status = #{request.registrationStatus},
+            handover_status = #{request.handoverStatus},
+            settlement_status = #{request.settlementStatus},
+            start_date = #{request.startDate},
+            end_date = #{request.endDate},
+            free_period_start = #{request.freePeriodStart},
+            free_period_end = #{request.freePeriodEnd},
+            fit_out_period_start = #{request.fitOutPeriodStart},
+            fit_out_period_end = #{request.fitOutPeriodEnd},
+            created_by = #{request.createdBy},
+            notes = #{request.notes},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="softDelete" parameterType="long">
+        UPDATE pm_lease
+        SET is_deleted = TRUE,
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <select id="findTransactionsByLeaseId" parameterType="long" resultType="com.eba.lease.dto.LeaseTransactionDto">
+        SELECT t.id,
+               t.lease_id,
+               l.lease_number,
+               t.transaction_number,
+               t.transaction_type,
+               t.previous_version_number,
+               t.new_version_number,
+               t.transaction_status,
+               CAST(t.effective_start_date AS VARCHAR) AS effective_start_date,
+               CAST(t.effective_end_date AS VARCHAR) AS effective_end_date,
+               t.revised_rent_amount,
+               t.revised_security_deposit,
+               t.target_unit_id,
+               u.unit_code AS target_unit_code,
+               t.reason,
+               t.notes,
+               t.created_by,
+               CAST(t.created_date AS VARCHAR) AS created_date
+        FROM pm_lease_transaction t
+        INNER JOIN pm_lease l ON l.id = t.lease_id
+        LEFT JOIN unit_master u ON u.id = t.target_unit_id
+        WHERE t.lease_id = #{leaseId} AND t.is_deleted = FALSE
+        ORDER BY t.id DESC
+    </select>
+
+    <select id="findTransactionByNumber" parameterType="string" resultType="com.eba.lease.dto.LeaseTransactionDto">
+        SELECT t.id,
+               t.lease_id,
+               l.lease_number,
+               t.transaction_number,
+               t.transaction_type,
+               t.previous_version_number,
+               t.new_version_number,
+               t.transaction_status,
+               CAST(t.effective_start_date AS VARCHAR) AS effective_start_date,
+               CAST(t.effective_end_date AS VARCHAR) AS effective_end_date,
+               t.revised_rent_amount,
+               t.revised_security_deposit,
+               t.target_unit_id,
+               u.unit_code AS target_unit_code,
+               t.reason,
+               t.notes,
+               t.created_by,
+               CAST(t.created_date AS VARCHAR) AS created_date
+        FROM pm_lease_transaction t
+        INNER JOIN pm_lease l ON l.id = t.lease_id
+        LEFT JOIN unit_master u ON u.id = t.target_unit_id
+        WHERE t.transaction_number = #{transactionNumber} AND t.is_deleted = FALSE
+    </select>
+
+    <insert id="insertTransaction">
+        INSERT INTO pm_lease_transaction (
+            tenant_id, lease_id, transaction_number, transaction_type, previous_version_number, new_version_number,
+            transaction_status, effective_start_date, effective_end_date, revised_rent_amount, revised_security_deposit,
+            target_unit_id, reason, notes, created_by
+        )
+        VALUES (
+            1, #{leaseId}, #{transactionNumber}, #{request.transactionType}, #{previousVersionNumber}, #{newVersionNumber},
+            #{request.transactionStatus}, #{request.effectiveStartDate}, #{request.effectiveEndDate}, #{request.revisedRentAmount}, #{request.revisedSecurityDeposit},
+            #{request.targetUnitId}, #{request.reason}, #{request.notes}, #{request.createdBy}
+        )
+    </insert>
+
+    <update id="applyTransaction">
+        UPDATE pm_lease
+        <set>
+            <if test="leaseStatus != null and leaseStatus != ''">lease_status = #{leaseStatus},</if>
+            <if test="renewalStatus != null and renewalStatus != ''">renewal_status = #{renewalStatus},</if>
+            <if test="startDate != null and startDate != ''">start_date = #{startDate},</if>
+            <if test="endDate != null and endDate != ''">end_date = #{endDate},</if>
+            <if test="rentAmount != null">rent_amount = #{rentAmount},</if>
+            <if test="securityDeposit != null">security_deposit = #{securityDeposit},</if>
+            <if test="unitId != null">unit_id = #{unitId},</if>
+            <if test="versionNumber != null">version_number = #{versionNumber},</if>
+            <if test="notes != null and notes != ''">notes = #{notes},</if>
+            updated_date = CURRENT_TIMESTAMP
+        </set>
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+</mapper>

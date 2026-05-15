@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.dashboard.mappers.DashboardMapper">
+    <select id="fetchExecutiveSummary" resultType="com.eba.dashboard.dto.ExecutiveDashboardDto">
+        SELECT CONCAT(CAST(ROUND((SUM(CASE WHEN occupancy_status = 'OCCUPIED' THEN 1 ELSE 0 END) * 100.0) / NULLIF(COUNT(*), 0), 1) AS VARCHAR), '%') AS occupancyPercentage,
+               CONCAT('$', CAST(COALESCE(SUM(rent_amount), 0) AS VARCHAR)) AS revenueSummary,
+               SUM(CASE WHEN end_date &lt;= DATEADD('DAY', 60, CURRENT_DATE()) THEN 1 ELSE 0 END) AS expiringLeases,
+               SUM(CASE WHEN occupancy_status = 'VACANT' THEN 1 ELSE 0 END) AS vacantUnits,
+               SUM(CASE WHEN approval_status NOT IN ('APPROVED', 'SIGNED') THEN 1 ELSE 0 END) AS pendingApprovals
+        FROM pm_lease
+    </select>
+</mapper>

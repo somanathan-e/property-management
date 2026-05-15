@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.lead.mappers.LeadMapper">
+    <sql id="leadColumns">l.id, l.property_id, p.property_code, l.lead_code, l.lead_name, l.source, l.status, l.stage</sql>
+    <select id="findPage" resultType="com.eba.lead.dto.LeadDto">SELECT <include refid="leadColumns" /> FROM lead l INNER JOIN property p ON p.id = l.property_id WHERE l.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(l.lead_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(l.lead_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(l.source) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(l.stage) LIKE CONCAT('%', LOWER(#{search}), '%'))</if> ORDER BY l.id DESC LIMIT #{limit} OFFSET #{offset}</select>
+    <select id="count" resultType="long">SELECT COUNT(*) FROM lead l WHERE l.is_deleted = FALSE <if test="search != null and search != ''">AND (LOWER(l.lead_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(l.lead_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(l.source) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(l.stage) LIKE CONCAT('%', LOWER(#{search}), '%'))</if></select>
+    <select id="findById" parameterType="long" resultType="com.eba.lead.dto.LeadDto">SELECT <include refid="leadColumns" /> FROM lead l INNER JOIN property p ON p.id = l.property_id WHERE l.id = #{id} AND l.is_deleted = FALSE</select>
+    <select id="findByCode" parameterType="string" resultType="com.eba.lead.dto.LeadDto">SELECT <include refid="leadColumns" /> FROM lead l INNER JOIN property p ON p.id = l.property_id WHERE l.lead_code = #{leadCode} AND l.is_deleted = FALSE</select>
+    <insert id="insert" parameterType="com.eba.lead.dto.LeadUpsertDto">INSERT INTO lead (tenant_id, property_id, lead_code, lead_name, source, status, stage) VALUES (1, #{propertyId}, #{leadCode}, #{leadName}, #{source}, #{status}, #{stage})</insert>
+    <update id="update">UPDATE lead SET property_id = #{request.propertyId}, lead_code = #{request.leadCode}, lead_name = #{request.leadName}, source = #{request.source}, status = #{request.status}, stage = #{request.stage}, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+    <update id="softDelete" parameterType="long">UPDATE lead SET is_deleted = TRUE, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+</mapper>
+

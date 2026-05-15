@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.asset.mappers.AssetMapper">
+    <sql id="assetColumns">
+        a.id,
+        a.asset_code,
+        a.asset_name,
+        a.property_id,
+        p.property_code,
+        a.category,
+        a.status
+    </sql>
+
+    <select id="findPage" resultType="com.eba.asset.dto.AssetDto">
+        SELECT <include refid="assetColumns" />
+        FROM asset a
+        INNER JOIN property p ON p.id = a.property_id
+        WHERE a.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(a.asset_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(a.asset_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(a.category) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(a.status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        ORDER BY a.id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM asset a
+        WHERE a.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(a.asset_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(a.asset_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(a.category) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(a.status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+    </select>
+
+    <select id="findById" parameterType="long" resultType="com.eba.asset.dto.AssetDto">
+        SELECT <include refid="assetColumns" />
+        FROM asset a
+        INNER JOIN property p ON p.id = a.property_id
+        WHERE a.id = #{id} AND a.is_deleted = FALSE
+    </select>
+
+    <select id="findByCode" parameterType="string" resultType="com.eba.asset.dto.AssetDto">
+        SELECT <include refid="assetColumns" />
+        FROM asset a
+        INNER JOIN property p ON p.id = a.property_id
+        WHERE a.asset_code = #{assetCode} AND a.is_deleted = FALSE
+    </select>
+
+    <insert id="insert" parameterType="com.eba.asset.dto.AssetUpsertDto">
+        INSERT INTO asset (tenant_id, property_id, asset_code, asset_name, category, status)
+        VALUES (1, #{propertyId}, #{assetCode}, #{assetName}, #{category}, #{status})
+    </insert>
+
+    <update id="update">
+        UPDATE asset
+        SET property_id = #{request.propertyId},
+            asset_code = #{request.assetCode},
+            asset_name = #{request.assetName},
+            category = #{request.category},
+            status = #{request.status},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="softDelete" parameterType="long">
+        UPDATE asset
+        SET is_deleted = TRUE,
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+</mapper>

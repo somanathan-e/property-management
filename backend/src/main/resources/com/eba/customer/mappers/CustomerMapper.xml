@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+    PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+    "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.customer.mappers.CustomerMapper">
+    <sql id="customerColumns">
+        id, customer_code, customer_name, category, email, phone, status
+    </sql>
+
+    <select id="findPage" resultType="com.eba.customer.dto.CustomerDto">
+        SELECT <include refid="customerColumns" />
+        FROM customer
+        WHERE is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(customer_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(customer_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(category) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+        ORDER BY id DESC
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="count" resultType="long">
+        SELECT COUNT(*)
+        FROM customer
+        WHERE is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (
+                LOWER(customer_code) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(customer_name) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(category) LIKE CONCAT('%', LOWER(#{search}), '%')
+                OR LOWER(status) LIKE CONCAT('%', LOWER(#{search}), '%')
+            )
+        </if>
+    </select>
+
+    <select id="findById" parameterType="long" resultType="com.eba.customer.dto.CustomerDto">
+        SELECT <include refid="customerColumns" />
+        FROM customer
+        WHERE id = #{id} AND is_deleted = FALSE
+    </select>
+
+    <select id="findByCode" parameterType="string" resultType="com.eba.customer.dto.CustomerDto">
+        SELECT <include refid="customerColumns" />
+        FROM customer
+        WHERE customer_code = #{customerCode} AND is_deleted = FALSE
+    </select>
+
+    <insert id="insert" parameterType="com.eba.customer.dto.CustomerUpsertDto">
+        INSERT INTO customer (tenant_id, customer_code, customer_name, category, email, phone, status)
+        VALUES (1, #{customerCode}, #{customerName}, #{category}, #{email}, #{phone}, #{status})
+    </insert>
+
+    <update id="update">
+        UPDATE customer
+        SET customer_code = #{request.customerCode},
+            customer_name = #{request.customerName},
+            category = #{request.category},
+            email = #{request.email},
+            phone = #{request.phone},
+            status = #{request.status},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+
+    <update id="softDelete" parameterType="long">
+        UPDATE customer
+        SET is_deleted = TRUE,
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{id} AND is_deleted = FALSE
+    </update>
+</mapper>

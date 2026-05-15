@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.eba.tower.mappers.TowerMapper">
+    <sql id="towerColumns">t.id, t.property_id, p.property_code, t.tower_code, t.tower_name, t.status</sql>
+    <select id="findPage" resultType="com.eba.tower.dto.TowerDto">
+        SELECT <include refid="towerColumns" /> FROM tower t INNER JOIN property p ON p.id = t.property_id
+        WHERE t.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (LOWER(t.tower_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(t.tower_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(p.property_code) LIKE CONCAT('%', LOWER(#{search}), '%'))
+        </if>
+        ORDER BY t.id DESC LIMIT #{limit} OFFSET #{offset}
+    </select>
+    <select id="count" resultType="long">
+        SELECT COUNT(*) FROM tower t INNER JOIN property p ON p.id = t.property_id
+        WHERE t.is_deleted = FALSE
+        <if test="search != null and search != ''">
+            AND (LOWER(t.tower_code) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(t.tower_name) LIKE CONCAT('%', LOWER(#{search}), '%') OR LOWER(p.property_code) LIKE CONCAT('%', LOWER(#{search}), '%'))
+        </if>
+    </select>
+    <select id="findById" parameterType="long" resultType="com.eba.tower.dto.TowerDto">SELECT <include refid="towerColumns" /> FROM tower t INNER JOIN property p ON p.id = t.property_id WHERE t.id = #{id} AND t.is_deleted = FALSE</select>
+    <select id="findByCode" parameterType="string" resultType="com.eba.tower.dto.TowerDto">SELECT <include refid="towerColumns" /> FROM tower t INNER JOIN property p ON p.id = t.property_id WHERE t.tower_code = #{towerCode} AND t.is_deleted = FALSE</select>
+    <insert id="insert" parameterType="com.eba.tower.dto.TowerUpsertDto">INSERT INTO tower (tenant_id, property_id, tower_code, tower_name, status) VALUES (1, #{propertyId}, #{towerCode}, #{towerName}, #{status})</insert>
+    <update id="update">UPDATE tower SET property_id = #{request.propertyId}, tower_code = #{request.towerCode}, tower_name = #{request.towerName}, status = #{request.status}, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+    <update id="softDelete" parameterType="long">UPDATE tower SET is_deleted = TRUE, updated_date = CURRENT_TIMESTAMP WHERE id = #{id} AND is_deleted = FALSE</update>
+</mapper>
+
