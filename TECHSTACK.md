@@ -18,9 +18,42 @@
 - Backend: Jakarta EE 10
 - Frontend: Next.js
 - Build Tool: Maven
-- Database: MySQL(UserName : root, Password: Password1)
+- Database: MySQL
 - API Style: SOAP / JAX-WS
 - Deployment: WAR based application
+
+---
+
+# Repository Implementation Baseline
+
+The mandated target stack remains CoreConnect-compatible Jakarta EE 10 with Apache CXF SOAP/JAX-WS and WAR packaging. The current repository also contains local development adapters so the application can be run and tested end to end during implementation.
+
+| Area | Current Repository State | Target / Constraint |
+|---|---|---|
+| Frontend | Next.js `15.3.2`, React `19.1.0`, TypeScript `5.8.3` | Keep `/property-management` base path |
+| Backend runtime | Jakarta REST/Jersey local adapter with embedded Grizzly | Business logic must remain in service layer and be portable to CoreConnect WAR/CXF |
+| Backend artifact | Local Maven module currently builds a runnable backend package | Production baseline remains CoreConnect-compatible WAR named `coreConnect` |
+| Persistence | MyBatis XML mappers and mapper interfaces under `com.eba.<module>` | Keep XML mapper structure and module ownership |
+| Database | MySQL target with HikariCP; H2 fallback may be used for local development | MySQL is the authoritative production database |
+| Local deployment | Docker Compose with frontend, backend, MySQL, and Nginx wrappers | Docker/Nginx are development/deployment wrappers, not replacement architecture |
+| API exposure | REST-style local adapter under `/property-management/api/v1` | Future SOAP/CXF contracts must call the same service layer |
+
+Local Docker database defaults:
+
+```text
+Database: property_management
+Application user: property_user
+Root user: root
+```
+
+Local development URLs:
+
+```text
+Frontend through Nginx: http://localhost/property-management
+Backend API adapter:     http://localhost/property-management/api/v1
+Frontend dev server:     http://localhost:3000/property-management
+Backend local server:    http://localhost:8080/property-management/api/v1
+```
 
 ---
 

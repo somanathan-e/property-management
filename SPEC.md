@@ -277,12 +277,25 @@ Screens:
 Reservation workflow:
 
 ```text
-Unit Availability Grid
+Select Unit Mode
+-> Select Property
+-> Select Tower
+-> Search and Add Unit(s)
 -> Reservation Form
 -> Payment Details
 -> Approval Workflow
 -> Reservation Confirmation
 ```
+
+Reservation unit modes:
+
+- Single Unit is the default mode and follows the normal one-unit reservation flow.
+- Multiple Units allows one reservation transaction to include more than one unit.
+- Multi-unit reservations must be limited to units from the same property.
+- Multi-unit selection must not show all available units in a large selection grid.
+- Users must manually search and add units one by one to the selected units grid.
+- The selected units grid must show Unit Number, Floor, Area, Rent, Deposit, Charges, and an action to remove the unit.
+- The form must show consolidated Total Area, Total Rent, Total Deposit, and Total Charges.
 
 Lease header actions:
 
@@ -309,6 +322,14 @@ Lease workflow states:
 - Active
 - Expired
 
+Lease unit modes:
+
+- Single Unit is the default mode and follows the normal one-unit lease flow.
+- Multiple Units allows one lease transaction to include more than one unit.
+- Multi-unit leases must be limited to units from the same property.
+- The lease form must use the same property, tower, manual unit search, add/remove, selected-unit grid, and consolidated total behavior as reservations.
+- A unit must be revalidated for availability before it is added to the selected units grid.
+
 Sales Management sections:
 
 - Unit Selection
@@ -322,6 +343,14 @@ Acceptance criteria:
 
 - reservations show unit details, customer summary, and reservation timeline
 - lease records can be created against customer and unit inventory
+- new reservations and leases support Single Unit and Multiple Units modes
+- Single Unit is the default for new reservation and lease transactions
+- multi-unit reservation and lease transactions are restricted to one property
+- property, tower, and unit options are filtered by the selected transaction period and availability
+- tower options are loaded only after property selection
+- unit search is loaded only after tower selection and a manual unit search/add action
+- duplicate, inactive, unavailable, already reserved, and already leased units are rejected
+- consolidated area, rent, deposit, and charge totals are visible for multi-unit transactions
 - lease approval status is visible through a workflow sidebar
 - lease changes are auditable
 - active lease allocation must prevent conflicting occupancy assignment
@@ -498,6 +527,8 @@ Acceptance criteria:
 - soft delete must be used where applicable
 - modules must not duplicate master data ownership
 - property, unit, customer, asset, and configuration masters are shared across workflows
+- commercial multi-unit transactions must not mix units from different properties
+- unit availability must consider unit status and overlapping reservation or lease periods
 - workflow actions must be auditable
 - approval-sensitive actions must capture actor, date/time, status, and remarks
 - tenant-aware design must be preserved in schema and service design

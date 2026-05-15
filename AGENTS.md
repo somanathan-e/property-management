@@ -110,6 +110,15 @@ basePath: "/property-management"
 
 Backend services must be deployable under the same application context in the CoreConnect WAR/container environment.
 
+Local development adapters must also preserve this context path. The current Docker/Nginx development wrapper exposes:
+
+```text
+http://localhost/property-management
+http://localhost/property-management/api/v1
+```
+
+These adapters are allowed for local verification only; they must not move business logic out of module service classes or replace the CoreConnect WAR/CXF baseline.
+
 ---
 
 # 5. High-Level Architecture
@@ -453,7 +462,7 @@ Screens:
 Core workflows:
 
 ```text
-Unit Availability -> Reservation -> Payment Details -> Approval Workflow -> Confirmation
+Unit Mode -> Property -> Tower -> Search/Add Unit(s) -> Reservation -> Payment Details -> Approval Workflow -> Confirmation
 ```
 
 ```text
@@ -467,6 +476,19 @@ Lease screen actions:
 - Amend
 - Terminate
 - Print
+
+Reservation and lease unit-selection standards:
+
+- Single Unit is the default mode.
+- Multiple Units allows more than one unit in one transaction.
+- Multi-unit transactions are restricted to one Property.
+- Property, Tower, and Unit availability must be filtered by the selected reservation or lease period.
+- Towers must load only after Property selection.
+- Units must be manually searched and added one by one after Tower selection.
+- Do not show all available units in a large selection grid for multi-unit transactions.
+- Selected unit grids must include Unit Number, Floor, Area, Rent, Deposit, Charges, and Remove.
+- Forms must show consolidated Total Area, Total Rent, Total Deposit, and Total Charges.
+- Duplicate, inactive, unavailable, already reserved, and already leased units must be rejected.
 
 Lease tabs:
 

@@ -177,7 +177,13 @@ Profile | Lease History | Payments | Complaints | Documents
 ## 4.1 Reservation Management
 
 ```text
-Unit Availability Grid
+Select Unit Mode
+↓
+Select Property
+↓
+Select Tower
+↓
+Search and Add Unit(s)
 ↓
 Reservation Form
 ↓
@@ -192,6 +198,25 @@ Reservation Confirmation
 - Unit Details
 - Customer Summary
 - Reservation Timeline
+
+### New Reservation Unit Selection
+
+| Mode | Behavior |
+|---|---|
+| Single Unit | Default flow for one available unit |
+| Multiple Units | Manual search-and-add flow for multiple units in one transaction |
+
+Multiple Units rules:
+
+- Select Property first.
+- Load only available Towers for the selected Property and period.
+- Select Tower before searching for units.
+- Search units manually and add units one by one.
+- Do not display all available units in a large grid.
+- Show selected units in a compact grid with Unit Number, Floor, Area, Rent, Deposit, Charges, and Remove.
+- Show consolidated Total Area, Total Rent, Total Deposit, and Total Charges.
+- Prevent duplicate units and units that are inactive, unavailable, already reserved, or already leased during the selected period.
+- Multi-unit selection is allowed only within the same Property.
 
 ## 4.2 Lease Management Screen
 
@@ -218,6 +243,26 @@ Audit Logs
 - Approved
 - Active
 - Expired
+
+### New Lease Unit Selection
+
+New Lease must use the same unit-selection model as New Reservation:
+
+| Mode | Behavior |
+|---|---|
+| Single Unit | Default flow for one available unit |
+| Multiple Units | Manual search-and-add flow for multiple units in one transaction |
+
+The Multiple Units flow must:
+
+- filter Properties, Towers, and Units by lease period and availability
+- load Towers only after Property selection
+- load/search Units only after Tower selection
+- let users add and remove units manually
+- keep all selected units within one Property
+- show Unit Number, Floor, Area, Rent, Deposit, Charges, and Remove in the selected units grid
+- show consolidated Total Area, Total Rent, Total Deposit, and Total Charges
+- validate availability again while adding a unit
 
 ## 4.3 Sales Management
 
