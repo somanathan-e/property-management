@@ -111,6 +111,11 @@ export function EntityManager({ config }: Readonly<{ config: EntityConfig }>) {
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
+    const missingField = config.fields.find((field) => !String(formValues[field.name] ?? "").trim());
+    if (missingField) {
+      setError(`${missingField.label} is required.`);
+      return;
+    }
     try {
       const payload = Object.fromEntries(
         config.fields.map((field) => {
@@ -253,14 +258,17 @@ export function EntityManager({ config }: Readonly<{ config: EntityConfig }>) {
                   Close
                 </button>
               </div>
-              <form className="mt-6 grid gap-4 md:grid-cols-2" onSubmit={handleSubmit}>
+              <form className="mt-6 grid gap-4 md:grid-cols-2" onSubmit={handleSubmit} noValidate>
                 {config.fields.map((field) => {
                   const options = field.options ?? references[field.name] ?? [];
                   return (
                     <label key={field.name} className="block text-sm text-ink">
-                      <span className="mb-2 block font-medium">{field.label}</span>
+                      <span className="mb-2 block font-medium">
+                        {field.label} <span className="text-rose-600">*</span>
+                      </span>
                       {field.type === "select" ? (
                         <select
+                          required
                           value={formValues[field.name] ?? ""}
                           onChange={(event) => setFormValues((current) => ({ ...current, [field.name]: event.target.value }))}
                           className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent"
@@ -274,6 +282,7 @@ export function EntityManager({ config }: Readonly<{ config: EntityConfig }>) {
                         </select>
                       ) : (
                         <input
+                          required
                           type={field.type}
                           value={formValues[field.name] ?? ""}
                           onChange={(event) => setFormValues((current) => ({ ...current, [field.name]: event.target.value }))}

@@ -31,6 +31,25 @@ type UnitOption = {
 type LeaseFormState = Record<string, string>;
 type TransactionFormState = Record<string, string>;
 type UnitTransactionMode = "SINGLE" | "MULTIPLE";
+type RentFrequency = "MONTHLY" | "ANNUAL";
+type SelectedAvailableUnit = AvailableUnitRecord & {
+  rentFrequency: RentFrequency;
+  benchmarkRent: number;
+  negotiatedRent: number;
+};
+type UnitSearchFilters = {
+  query: string;
+  propertyId: string;
+  towerId: string;
+  startDate: string;
+  endDate: string;
+  floor: string;
+  unitType: string;
+  minArea: string;
+  maxArea: string;
+  minRent: string;
+  maxRent: string;
+};
 
 const leaseStatusOptions = ["ACTIVE", "PENDING_APPROVAL", "SUSPENDED", "TERMINATION_REVIEW", "CANCELLED"];
 const renewalStatusOptions = ["NOT_DUE", "DUE_SOON", "UNDER_REVIEW", "RENEWED", "EXTENDED"];
@@ -91,6 +110,7 @@ function buildLeaseForm(record?: LeaseRecord | null): LeaseFormState {
     leaseStatus: record?.leaseStatus ?? "ACTIVE",
     occupancyStatus: record?.occupancyStatus ?? "OCCUPIED",
     currency: record?.currency ?? "AED",
+    rentFrequency: "MONTHLY",
     rentAmount: record ? String(record.rentAmount) : "",
     securityDeposit: record ? String(record.securityDeposit) : "",
     renewalStatus: record?.renewalStatus ?? "NOT_DUE",
@@ -135,20 +155,56 @@ function formatMoney(value: number, currency: string) {
   return `${currency} ${value.toLocaleString()}`;
 }
 
+function firstMissingField(form: Record<string, string>, fields: { name: string; label: string }[]) {
+  return fields.find((field) => !String(form[field.name] ?? "").trim())?.label ?? null;
+}
+
+function availableUnitRent(unit: AvailableUnitRecord, rentFrequency: string) {
+  return rentFrequency === "ANNUAL" ? unit.monthlyRent * 12 : unit.monthlyRent;
+}
+
+function buildSelectedLeaseUnit(unit: AvailableUnitRecord, rentFrequency: RentFrequency = "MONTHLY"): SelectedAvailableUnit {
+  const benchmarkRent = availableUnitRent(unit, rentFrequency);
+  return {
+    ...unit,
+    rentFrequency,
+    benchmarkRent,
+    negotiatedRent: benchmarkRent
+  };
+}
+
 function availableUnitCharges(unit: AvailableUnitRecord) {
   return unit.maintenanceCharges + unit.camCharges + unit.parkingCharges + Math.round(unit.monthlyRent * 0.05);
 }
 
-function selectedAvailableUnitTotals(units: AvailableUnitRecord[]) {
+function leaseUnitVarianceAmount(unit: SelectedAvailableUnit) {
+  return unit.negotiatedRent - unit.benchmarkRent;
+}
+
+function leaseUnitVariancePercent(unit: SelectedAvailableUnit) {
+  return unit.benchmarkRent > 0 ? (leaseUnitVarianceAmount(unit) / unit.benchmarkRent) * 100 : 0;
+}
+
+function selectedAvailableUnitTotals(units: SelectedAvailableUnit[]) {
   return units.reduce(
     (totals, unit) => ({
+      count: totals.count + 1,
       area: totals.area + unit.area,
-      rent: totals.rent + unit.monthlyRent,
+      benchmarkRent: totals.benchmarkRent + unit.benchmarkRent,
+      negotiatedRent: totals.negotiatedRent + unit.negotiatedRent,
+      varianceAmount: totals.varianceAmount + leaseUnitVarianceAmount(unit),
       deposit: totals.deposit + unit.securityDeposit,
       charges: totals.charges + availableUnitCharges(unit)
     }),
-    { area: 0, rent: 0, deposit: 0, charges: 0 }
+    { count: 0, area: 0, benchmarkRent: 0, negotiatedRent: 0, varianceAmount: 0, deposit: 0, charges: 0 }
   );
+}
+
+function averageLeaseVariancePercent(units: SelectedAvailableUnit[]) {
+  if (units.length === 0) {
+    return 0;
+  }
+  return units.reduce((sum, unit) => sum + leaseUnitVariancePercent(unit), 0) / units.length;
 }
 
 function formatNumber(value: number) {
@@ -232,12 +288,13 @@ export function LeaseWorkspacePage() {
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [leaseModalOpen, setLeaseModalOpen] = useState(false);
+  const [unitSelectorOpen, setUnitSelectorOpen] = useState(false);
   const [editingLease, setEditingLease] = useState<LeaseRecord | null>(null);
   const [leaseForm, setLeaseForm] = useState<LeaseFormState>(() => buildLeaseForm(null));
   const [leaseFormTab, setLeaseFormTab] = useState<(typeof leaseFormTabs)[number]["id"]>("general");
   const [leaseUnitMode, setLeaseUnitMode] = useState<UnitTransactionMode>("SINGLE");
   const [availableLeaseUnits, setAvailableLeaseUnits] = useState<AvailableUnitRecord[]>([]);
-  const [selectedLeaseUnits, setSelectedLeaseUnits] = useState<AvailableUnitRecord[]>([]);
+  const [selectedLeaseUnits, setSelectedLeaseUnits] = useState<SelectedAvailableUnit[]>([]);
   const [transactionContext, setTransactionContext] = useState<{ lease: LeaseRecord; actionType: string } | null>(null);
   const [transactionForm, setTransactionForm] = useState<TransactionFormState>(() =>
     buildTransactionForm("RENEWAL", {
@@ -334,23 +391,43 @@ export function LeaseWorkspacePage() {
     }
   }
 
-  async function searchLeaseUnitsForForm(unitSearch = "") {
+  async function searchLeaseUnitsForForm(filters?: Partial<UnitSearchFilters>) {
     try {
       const params = new URLSearchParams();
       params.set("page", "1");
       params.set("size", "100");
-      const startDate = leaseForm.startDate || new Date().toISOString().slice(0, 10);
-      const endDate = leaseForm.endDate || startDate;
+      const startDate = filters?.startDate || leaseForm.startDate || new Date().toISOString().slice(0, 10);
+      const endDate = filters?.endDate || leaseForm.endDate || startDate;
       params.set("startDate", startDate);
       params.set("endDate", endDate);
-      if (leaseForm.propertyId) {
-        params.set("propertyId", leaseForm.propertyId);
+      const propertyId = filters?.propertyId ?? leaseForm.propertyId;
+      if (propertyId) {
+        params.set("propertyId", propertyId);
       }
-      if (leaseForm.towerId) {
-        params.set("towerId", leaseForm.towerId);
+      const towerId = filters?.towerId ?? leaseForm.towerId;
+      if (towerId) {
+        params.set("towerId", towerId);
       }
-      if (unitSearch.trim()) {
-        params.set("unitSearch", unitSearch.trim());
+      if (filters?.query?.trim()) {
+        params.set("unitSearch", filters.query.trim());
+      }
+      if (filters?.floor?.trim()) {
+        params.set("floor", filters.floor.trim());
+      }
+      if (filters?.unitType) {
+        params.set("unitType", filters.unitType);
+      }
+      if (filters?.minArea) {
+        params.set("minArea", filters.minArea);
+      }
+      if (filters?.maxArea) {
+        params.set("maxArea", filters.maxArea);
+      }
+      if (filters?.minRent) {
+        params.set("minRent", filters.minRent);
+      }
+      if (filters?.maxRent) {
+        params.set("maxRent", filters.maxRent);
       }
       const result = await apiGet<PagedResult<AvailableUnitRecord>>(`/reservations/available-units?${params.toString()}`);
       setAvailableLeaseUnits(result.items);
@@ -423,7 +500,12 @@ export function LeaseWorkspacePage() {
       setError("Multiple-unit leases can include units from one property only.");
       return;
     }
-    const nextUnits = [...selectedLeaseUnits, unit];
+    if (unit.currency !== leaseForm.currency) {
+      setError("Selected units must use the lease currency.");
+      return;
+    }
+    const selectedUnit = buildSelectedLeaseUnit(unit);
+    const nextUnits = [...selectedLeaseUnits, selectedUnit];
     const totals = selectedAvailableUnitTotals(nextUnits);
     setSelectedLeaseUnits(nextUnits);
     setLeaseForm((current) => ({
@@ -431,21 +513,49 @@ export function LeaseWorkspacePage() {
       propertyId: String(nextUnits[0].propertyId),
       towerId: current.towerId || String(nextUnits[0].towerId),
       unitId: String(nextUnits[0].unitId),
-      rentAmount: String(totals.rent),
+      rentAmount: String(totals.negotiatedRent),
       securityDeposit: String(totals.deposit),
       currency: nextUnits[0].currency
     }));
   }
 
-  function removeLeaseUnit(unit: AvailableUnitRecord) {
+  function removeLeaseUnit(unit: Pick<AvailableUnitRecord, "unitId">) {
     setSelectedLeaseUnits((current) => {
       const nextUnits = current.filter((item) => item.unitId !== unit.unitId);
       const totals = selectedAvailableUnitTotals(nextUnits);
       setLeaseForm((form) => ({
         ...form,
         unitId: nextUnits[0] ? String(nextUnits[0].unitId) : "",
-        rentAmount: nextUnits.length > 0 ? String(totals.rent) : form.rentAmount,
-        securityDeposit: nextUnits.length > 0 ? String(totals.deposit) : form.securityDeposit
+        propertyId: nextUnits[0] ? String(nextUnits[0].propertyId) : form.propertyId,
+        towerId: nextUnits[0] ? String(nextUnits[0].towerId) : form.towerId,
+        rentAmount: nextUnits.length > 0 ? String(totals.negotiatedRent) : "",
+        securityDeposit: nextUnits.length > 0 ? String(totals.deposit) : ""
+      }));
+      return nextUnits;
+    });
+  }
+
+  function updateLeaseUnit(unitId: number, changes: Partial<Pick<SelectedAvailableUnit, "rentFrequency" | "negotiatedRent">>) {
+    setSelectedLeaseUnits((current) => {
+      const nextUnits = current.map((unit) => {
+        if (unit.unitId !== unitId) {
+          return unit;
+        }
+        const rentFrequency = changes.rentFrequency ?? unit.rentFrequency;
+        const benchmarkRent = availableUnitRent(unit, rentFrequency);
+        const negotiatedRent = changes.negotiatedRent ?? (changes.rentFrequency ? benchmarkRent : unit.negotiatedRent);
+        return {
+          ...unit,
+          rentFrequency,
+          benchmarkRent,
+          negotiatedRent
+        };
+      });
+      const totals = selectedAvailableUnitTotals(nextUnits);
+      setLeaseForm((form) => ({
+        ...form,
+        rentAmount: nextUnits.length > 0 ? String(totals.negotiatedRent) : "",
+        securityDeposit: nextUnits.length > 0 ? String(totals.deposit) : ""
       }));
       return nextUnits;
     });
@@ -460,39 +570,71 @@ export function LeaseWorkspacePage() {
   async function submitLease(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    const multiUnitSelected = leaseUnitMode === "MULTIPLE";
-    const unitsForPayload = multiUnitSelected ? selectedLeaseUnits : [];
-    if (multiUnitSelected && unitsForPayload.length === 0) {
-      setError("Select at least one available unit for a multiple-unit lease.");
+    const missingField = firstMissingField(leaseForm, [
+      { name: "leaseNumber", label: "Lease Number" },
+      { name: "leaseType", label: "Lease Type" },
+      { name: "propertyId", label: "Property" },
+      { name: "customerId", label: "Customer" },
+      { name: "leaseStatus", label: "Lease Status" },
+      { name: "renewalStatus", label: "Renewal Status" },
+      { name: "requestInitiator", label: "Request Initiator" },
+      { name: "createdBy", label: "Created By" },
+      { name: "startDate", label: "Start Date" },
+      { name: "endDate", label: "End Date" },
+      { name: "currency", label: "Currency" },
+      { name: "paymentStatus", label: "Payment Status" },
+      { name: "occupancyStatus", label: "Occupancy Status" },
+      { name: "registrationStatus", label: "Registration Status" },
+      { name: "handoverStatus", label: "Handover Status" },
+      { name: "settlementStatus", label: "Settlement Status" },
+      { name: "approvalStatus", label: "Approval Status" },
+      { name: "documentStatus", label: "Document Status" }
+    ]);
+    if (missingField) {
+      setError(`${missingField} is required.`);
       return;
     }
-    if (multiUnitSelected && new Set(unitsForPayload.map((unit) => unit.unitId)).size !== unitsForPayload.length) {
+    const unitsForPayload = selectedLeaseUnits;
+    const hasSelectedUnits = unitsForPayload.length > 0;
+    if (!editingLease && !hasSelectedUnits) {
+      setError("Select at least one available unit for the lease.");
+      return;
+    }
+    if (hasSelectedUnits && new Set(unitsForPayload.map((unit) => unit.unitId)).size !== unitsForPayload.length) {
       setError("Duplicate units are not allowed in the same lease.");
       return;
     }
-    if (multiUnitSelected && unitsForPayload.some((unit) => unit.availabilityStatus !== "AVAILABLE")) {
+    if (hasSelectedUnits && unitsForPayload.some((unit) => unit.availabilityStatus !== "AVAILABLE")) {
       setError("Inactive, reserved, or unavailable units cannot be selected.");
       return;
     }
-    if (multiUnitSelected && new Set(unitsForPayload.map((unit) => unit.propertyId)).size > 1) {
-      setError("Multiple-unit leases can include units from one property only.");
+    if (hasSelectedUnits && new Set(unitsForPayload.map((unit) => unit.propertyId)).size > 1) {
+      setError("Lease units must belong to one property only.");
       return;
     }
-    const primaryMultiUnit = unitsForPayload[0];
-    const multiTotals = selectedAvailableUnitTotals(unitsForPayload);
+    if (hasSelectedUnits && new Set(unitsForPayload.map((unit) => unit.currency)).size > 1) {
+      setError("Lease units must use one currency only.");
+      return;
+    }
+    if (hasSelectedUnits && unitsForPayload.some((unit) => unit.negotiatedRent < 0)) {
+      setError("Negotiated rent cannot be negative.");
+      return;
+    }
+    const primaryUnit = unitsForPayload[0];
+    const selectedTotals = selectedAvailableUnitTotals(unitsForPayload);
     try {
       const payload = {
         leaseNumber: leaseForm.leaseNumber,
-        propertyId: multiUnitSelected ? primaryMultiUnit.propertyId : Number(leaseForm.propertyId),
-        towerId: multiUnitSelected ? primaryMultiUnit.towerId : Number(leaseForm.towerId),
-        unitId: multiUnitSelected ? primaryMultiUnit.unitId : Number(leaseForm.unitId),
+        propertyId: hasSelectedUnits ? primaryUnit.propertyId : Number(leaseForm.propertyId),
+        towerId: hasSelectedUnits ? primaryUnit.towerId : Number(leaseForm.towerId),
+        unitId: hasSelectedUnits ? primaryUnit.unitId : Number(leaseForm.unitId),
         customerId: Number(leaseForm.customerId),
         leaseType: leaseForm.leaseType,
         leaseStatus: leaseForm.leaseStatus,
         occupancyStatus: leaseForm.occupancyStatus,
         currency: leaseForm.currency,
-        rentAmount: multiUnitSelected ? multiTotals.rent : Number(leaseForm.rentAmount),
-        securityDeposit: multiUnitSelected ? multiTotals.deposit : Number(leaseForm.securityDeposit),
+        rentAmount: hasSelectedUnits ? selectedTotals.negotiatedRent : Number(leaseForm.rentAmount),
+        securityDeposit: hasSelectedUnits ? selectedTotals.deposit : Number(leaseForm.securityDeposit),
         renewalStatus: leaseForm.renewalStatus,
         requestInitiator: leaseForm.requestInitiator,
         approvalStatus: leaseForm.approvalStatus,
@@ -509,13 +651,13 @@ export function LeaseWorkspacePage() {
         fitOutPeriodEnd: leaseForm.fitOutPeriodEnd || null,
         createdBy: leaseForm.createdBy,
         notes: leaseForm.notes,
-        units: multiUnitSelected
+        units: hasSelectedUnits
           ? unitsForPayload.map((unit) => ({
               propertyId: unit.propertyId,
               unitId: unit.unitId,
               unitNumber: unit.unitNumber,
               area: unit.area,
-              rent: unit.monthlyRent,
+              rent: unit.negotiatedRent,
               additionalCharges: unit.maintenanceCharges + unit.camCharges + unit.parkingCharges,
               deposit: unit.securityDeposit,
               tax: Math.round(unit.monthlyRent * 0.05),
@@ -547,6 +689,21 @@ export function LeaseWorkspacePage() {
       return;
     }
     setError(null);
+    const missingField = firstMissingField(transactionForm, [
+      { name: "transactionStatus", label: "Transaction Status" },
+      { name: "createdBy", label: "Created By" },
+      { name: "effectiveStartDate", label: "Effective Start Date" },
+      { name: "effectiveEndDate", label: "Effective End Date" },
+      { name: "reason", label: "Reason" }
+    ]);
+    if (missingField) {
+      setError(`${missingField} is required.`);
+      return;
+    }
+    if (transactionContext.actionType === "TRANSFER" && !transactionForm.targetUnitId) {
+      setError("Target Unit is required.");
+      return;
+    }
     try {
       await apiPost(`/leases/${transactionContext.lease.id}/transactions`, {
         transactionType: transactionForm.transactionType,
@@ -796,26 +953,30 @@ export function LeaseWorkspacePage() {
             customers={customers}
             availableUnits={availableLeaseUnits}
             selectedUnits={selectedLeaseUnits}
+            unitSelectorOpen={unitSelectorOpen}
             unitMode={leaseUnitMode}
             onClose={() => {
               setLeaseModalOpen(false);
+              setUnitSelectorOpen(false);
               setLeaseUnitMode("SINGLE");
               setSelectedLeaseUnits([]);
             }}
             onSubmit={submitLease}
             onFormChange={setLeaseForm}
             onTabChange={setLeaseFormTab}
+            onUnitSelectorOpen={setUnitSelectorOpen}
             onUnitModeChange={(mode) => {
               setLeaseUnitMode(mode);
               if (mode === "SINGLE") {
                 setSelectedLeaseUnits([]);
               } else {
-                void searchLeaseUnitsForForm();
+                void searchLeaseUnitsForForm({});
               }
             }}
             onSearchUnits={searchLeaseUnitsForForm}
             onAddUnit={addLeaseUnit}
             onRemoveUnit={removeLeaseUnit}
+            onUpdateUnit={updateLeaseUnit}
           />
         ) : null}
 
@@ -917,6 +1078,21 @@ export function LeaseDetailPage({ leaseId }: Readonly<{ leaseId: number }>) {
       return;
     }
     const activeLease = transactionContext.lease;
+    const missingField = firstMissingField(transactionForm, [
+      { name: "transactionStatus", label: "Transaction Status" },
+      { name: "createdBy", label: "Created By" },
+      { name: "effectiveStartDate", label: "Effective Start Date" },
+      { name: "effectiveEndDate", label: "Effective End Date" },
+      { name: "reason", label: "Reason" }
+    ]);
+    if (missingField) {
+      setError(`${missingField} is required.`);
+      return;
+    }
+    if (transactionContext.actionType === "TRANSFER" && !transactionForm.targetUnitId) {
+      setError("Target Unit is required.");
+      return;
+    }
     try {
       await apiPost(`/leases/${activeLease.id}/transactions`, {
         transactionType: transactionForm.transactionType,
@@ -1193,15 +1369,18 @@ function LeaseFormModal({
   customers,
   availableUnits,
   selectedUnits,
+  unitSelectorOpen,
   unitMode,
   onClose,
   onSubmit,
   onFormChange,
   onTabChange,
+  onUnitSelectorOpen,
   onUnitModeChange,
   onSearchUnits,
   onAddUnit,
-  onRemoveUnit
+  onRemoveUnit,
+  onUpdateUnit
 }: Readonly<{
   editingLease: LeaseRecord | null;
   form: LeaseFormState;
@@ -1211,18 +1390,20 @@ function LeaseFormModal({
   units: UnitOption[];
   customers: CustomerRecord[];
   availableUnits: AvailableUnitRecord[];
-  selectedUnits: AvailableUnitRecord[];
+  selectedUnits: SelectedAvailableUnit[];
+  unitSelectorOpen: boolean;
   unitMode: UnitTransactionMode;
   onClose: () => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
   onFormChange: React.Dispatch<React.SetStateAction<LeaseFormState>>;
   onTabChange: React.Dispatch<React.SetStateAction<(typeof leaseFormTabs)[number]["id"]>>;
+  onUnitSelectorOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onUnitModeChange: (mode: UnitTransactionMode) => void;
-  onSearchUnits: (unitSearch?: string) => void;
+  onSearchUnits: (filters?: Partial<UnitSearchFilters>) => void;
   onAddUnit: (unit: AvailableUnitRecord) => void;
-  onRemoveUnit: (unit: AvailableUnitRecord) => void;
+  onRemoveUnit: (unit: Pick<AvailableUnitRecord, "unitId">) => void;
+  onUpdateUnit: (unitId: number, changes: Partial<Pick<SelectedAvailableUnit, "rentFrequency" | "negotiatedRent">>) => void;
 }>) {
-  const [unitSearch, setUnitSearch] = useState("");
   const propertyOptions = properties.map((property) => ({ value: String(property.id), label: property.propertyName }));
   const availablePropertyOptions = useMemo(() => {
     const propertyMap = new Map<string, string>();
@@ -1237,15 +1418,13 @@ function LeaseFormModal({
       .forEach((unit) => towerMap.set(String(unit.towerId), unit.towerName));
     return Array.from(towerMap, ([value, label]) => ({ value, label }));
   }, [availableUnits, form.propertyId]);
-  const unitOptions = units.map((unit) => ({ value: String(unit.id), label: `${unit.unitCode} · ${unit.unitName}` }));
   const customerOptions = customers.map((customer) => ({ value: String(customer.id), label: customer.customerName }));
   const totals = selectedAvailableUnitTotals(selectedUnits);
-  const selectedUnitIds = useMemo(() => new Set(selectedUnits.map((unit) => unit.unitId)), [selectedUnits]);
-  const unitMatches = availableUnits
-    .filter((unit) => !form.propertyId || String(unit.propertyId) === form.propertyId)
-    .filter((unit) => !form.towerId || String(unit.towerId) === form.towerId)
-    .filter((unit) => unitSearch.trim().length === 0 || unit.unitNumber.toLowerCase().includes(unitSearch.trim().toLowerCase()))
-    .slice(0, 10);
+  const averageVariance = averageLeaseVariancePercent(selectedUnits);
+  const selectionLabel = selectedUnits.length <= 1 ? "Single Unit" : "Multi-Unit";
+  const selectedPropertyId = selectedUnits[0] ? String(selectedUnits[0].propertyId) : form.propertyId;
+  const periodSelected = Boolean(form.startDate && form.endDate);
+  const filteredPropertyOptions = periodSelected ? availablePropertyOptions : propertyOptions;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/40 p-4">
@@ -1259,22 +1438,6 @@ function LeaseFormModal({
             Close
           </button>
         </div>
-        {!editingLease ? (
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-2">
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(["SINGLE", "MULTIPLE"] as UnitTransactionMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => onUnitModeChange(mode)}
-                  className={["rounded-xl px-4 py-3 text-sm font-medium", unitMode === mode ? "bg-white text-accent shadow-sm" : "text-steel hover:bg-white"].join(" ")}
-                >
-                  {mode === "SINGLE" ? "Single Unit" : "Multiple Units"}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : null}
         <div className="mt-6 flex flex-wrap gap-2 rounded-[22px] bg-slate-50 p-2">
           {leaseFormTabs.map((tab) => (
             <button
@@ -1287,117 +1450,130 @@ function LeaseFormModal({
             </button>
           ))}
         </div>
-        <form className="mt-6 space-y-6" onSubmit={onSubmit}>
+        <form className="mt-6 space-y-6" onSubmit={onSubmit} noValidate>
           {formTab === "general" ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <InputField label="Lease Number" value={form.leaseNumber} onChange={(value) => onFormChange((current) => ({ ...current, leaseNumber: value }))} />
-              <SelectField label="Lease Type" value={form.leaseType} options={toOptions(leaseTypeOptions)} onChange={(value) => onFormChange((current) => ({ ...current, leaseType: value }))} />
-              <SelectField label="Property" value={form.propertyId} options={unitMode === "MULTIPLE" && !editingLease ? (availablePropertyOptions.length > 0 ? availablePropertyOptions : propertyOptions) : propertyOptions} onChange={(value) => onFormChange((current) => ({ ...current, propertyId: value, towerId: unitMode === "MULTIPLE" ? "" : current.towerId, unitId: unitMode === "MULTIPLE" ? "" : current.unitId }))} />
-              <SelectField label="Customer" value={form.customerId} options={customerOptions} onChange={(value) => onFormChange((current) => ({ ...current, customerId: value }))} />
-              <SelectField label="Lease Status" value={form.leaseStatus} options={toOptions(leaseStatusOptions)} onChange={(value) => onFormChange((current) => ({ ...current, leaseStatus: value }))} />
-              <SelectField label="Renewal Status" value={form.renewalStatus} options={toOptions(renewalStatusOptions)} onChange={(value) => onFormChange((current) => ({ ...current, renewalStatus: value }))} />
-              <SelectField label="Request Initiator" value={form.requestInitiator} options={toOptions(requestInitiatorOptions)} onChange={(value) => onFormChange((current) => ({ ...current, requestInitiator: value }))} />
-              <InputField label="Created By" value={form.createdBy} onChange={(value) => onFormChange((current) => ({ ...current, createdBy: value }))} />
+              <InputField label="Lease Number" value={form.leaseNumber} onChange={(value) => onFormChange((current) => ({ ...current, leaseNumber: value }))} required />
+              <SelectField label="Lease Type" value={form.leaseType} options={toOptions(leaseTypeOptions)} onChange={(value) => onFormChange((current) => ({ ...current, leaseType: value }))} required />
+              <SelectField
+                label="Property"
+                value={selectedPropertyId}
+                options={filteredPropertyOptions}
+                onChange={(value) => {
+                  onFormChange((current) => ({ ...current, propertyId: value, towerId: "", unitId: "" }));
+                  onSearchUnits({ propertyId: value });
+                }}
+                required
+              />
+              <SelectField label="Customer" value={form.customerId} options={customerOptions} onChange={(value) => onFormChange((current) => ({ ...current, customerId: value }))} required />
+              <SelectField label="Lease Status" value={form.leaseStatus} options={toOptions(leaseStatusOptions)} onChange={(value) => onFormChange((current) => ({ ...current, leaseStatus: value }))} required />
+              <SelectField label="Renewal Status" value={form.renewalStatus} options={toOptions(renewalStatusOptions)} onChange={(value) => onFormChange((current) => ({ ...current, renewalStatus: value }))} required />
+              <SelectField label="Request Initiator" value={form.requestInitiator} options={toOptions(requestInitiatorOptions)} onChange={(value) => onFormChange((current) => ({ ...current, requestInitiator: value }))} required />
+              <InputField label="Created By" value={form.createdBy} onChange={(value) => onFormChange((current) => ({ ...current, createdBy: value }))} required />
             </div>
           ) : null}
           {formTab === "period" ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <InputField label="Start Date" type="date" value={form.startDate} onChange={(value) => onFormChange((current) => ({ ...current, startDate: value }))} />
-              <InputField label="End Date" type="date" value={form.endDate} onChange={(value) => onFormChange((current) => ({ ...current, endDate: value }))} />
+              <InputField
+                label="Start Date"
+                type="date"
+                value={form.startDate}
+                required
+                onChange={(value) => {
+                  onFormChange((current) => ({ ...current, startDate: value }));
+                  if (value && form.endDate) {
+                    onSearchUnits({ startDate: value, endDate: form.endDate });
+                  }
+                }}
+              />
+              <InputField
+                label="End Date"
+                type="date"
+                value={form.endDate}
+                required
+                onChange={(value) => {
+                  onFormChange((current) => ({ ...current, endDate: value }));
+                  if (form.startDate && value) {
+                    onSearchUnits({ startDate: form.startDate, endDate: value });
+                  }
+                }}
+              />
               <InputField label="Rent Amount" type="number" value={form.rentAmount} onChange={(value) => onFormChange((current) => ({ ...current, rentAmount: value }))} />
               <InputField label="Security Deposit" type="number" value={form.securityDeposit} onChange={(value) => onFormChange((current) => ({ ...current, securityDeposit: value }))} />
-              <InputField label="Currency" value={form.currency} onChange={(value) => onFormChange((current) => ({ ...current, currency: value }))} />
-              <SelectField label="Payment Status" value={form.paymentStatus} options={toOptions(paymentOptions)} onChange={(value) => onFormChange((current) => ({ ...current, paymentStatus: value }))} />
+              <InputField label="Currency" value={form.currency} onChange={(value) => onFormChange((current) => ({ ...current, currency: value }))} required />
+              <SelectField label="Payment Status" value={form.paymentStatus} options={toOptions(paymentOptions)} onChange={(value) => onFormChange((current) => ({ ...current, paymentStatus: value }))} required />
             </div>
           ) : null}
           {formTab === "unit" ? (
             <div className="grid gap-4 md:grid-cols-2">
-              {unitMode === "SINGLE" || editingLease ? (
-                <>
-                  <SelectField label="Tower" value={form.towerId} options={towerOptions} onChange={(value) => onFormChange((current) => ({ ...current, towerId: value }))} />
-                  <SelectField label="Unit" value={form.unitId} options={unitOptions} onChange={(value) => onFormChange((current) => ({ ...current, unitId: value }))} />
-                </>
-              ) : (
-                <div className="md:col-span-2 rounded-2xl border border-slate-200">
-                  <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-3">
-                    <SelectField
-                      label="Tower"
-                      value={form.towerId}
-                      options={availableTowerOptions.length > 0 ? availableTowerOptions : towerOptions}
-                      onChange={(value) => {
-                        onFormChange((current) => ({ ...current, towerId: value, unitId: "" }));
-                        setUnitSearch("");
-                        setTimeout(() => onSearchUnits(""), 0);
-                      }}
-                    />
-                    <label className="block text-sm text-ink md:col-span-2">
-                      <span className="mb-2 block font-medium">Search Unit</span>
-                      <div className="flex gap-2">
-                        <input
-                          value={unitSearch}
-                          onChange={(event) => setUnitSearch(event.target.value)}
-                          placeholder="Unit number"
-                          className="min-w-0 flex-1 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-accent focus:bg-white"
-                        />
-                        <button type="button" onClick={() => onSearchUnits(unitSearch)} className="rounded-2xl bg-accent px-4 py-3 text-sm font-medium text-white">
-                          Search
-                        </button>
-                      </div>
-                    </label>
+              <div className="md:col-span-2 rounded-2xl border border-slate-200">
+                <div className="flex flex-col gap-3 border-b border-slate-200 p-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="text-xs uppercase tracking-[0.16em] text-steel">Selected Units</p>
+                    <p className="mt-1 text-sm font-medium text-ink">{selectionLabel} · {selectedUnits.length} selected</p>
                   </div>
-                  {unitMatches.length > 0 ? (
-                    <div className="border-b border-slate-200 p-4">
-                      <div className="grid gap-2 md:grid-cols-2">
-                        {unitMatches.map((unit) => (
-                          <div key={unit.unitId} className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-                            <div>
-                              <p className="text-sm font-medium text-ink">{unit.unitNumber}</p>
-                              <p className="mt-1 text-xs text-steel">{unit.towerName} · Floor {unit.floor} · {unit.area} {unit.areaUnit}</p>
-                            </div>
-                            <button type="button" disabled={selectedUnitIds.has(unit.unitId)} onClick={() => onAddUnit(unit)} className="rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
-                              Add Unit
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-4 sm:grid-cols-4">
-                    <SummaryValue label="Total Area" value={`${totals.area.toLocaleString()} sq.ft`} />
-                    <SummaryValue label="Total Rent" value={formatMoney(totals.rent, selectedUnits[0]?.currency ?? form.currency)} />
-                    <SummaryValue label="Total Deposit" value={formatMoney(totals.deposit, selectedUnits[0]?.currency ?? form.currency)} />
-                    <SummaryValue label="Total Charges" value={formatMoney(totals.charges, selectedUnits[0]?.currency ?? form.currency)} />
-                  </div>
-                  <div className="max-h-80 overflow-y-auto">
-                    <table className="min-w-full text-left text-sm">
-                      <thead className="sticky top-0 bg-white text-steel">
-                        <tr>{["Unit Number", "Floor", "Area", "Rent", "Deposit", "Charges", "Action"].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr>
-                      </thead>
-                      <tbody>
-                        {selectedUnits.length === 0 ? (
-                          <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-steel">Search and add units one by one.</td></tr>
-                        ) : selectedUnits.map((unit) => (
-                          <tr key={unit.unitId} className="border-t border-slate-100">
-                            <td className="px-4 py-3 text-ink">{unit.unitNumber}</td>
-                            <td className="px-4 py-3 text-steel">{unit.floor}</td>
-                            <td className="px-4 py-3 text-steel">{unit.area} {unit.areaUnit}</td>
-                            <td className="px-4 py-3 text-steel">{formatMoney(unit.monthlyRent, unit.currency)}</td>
-                            <td className="px-4 py-3 text-steel">{formatMoney(unit.securityDeposit, unit.currency)}</td>
-                            <td className="px-4 py-3 text-steel">{formatMoney(availableUnitCharges(unit), unit.currency)}</td>
-                            <td className="px-4 py-3">
-                              <button type="button" onClick={() => onRemoveUnit(unit)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">Remove</button>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onUnitSelectorOpen(true);
+                      onSearchUnits({});
+                    }}
+                    disabled={!form.propertyId || !form.startDate || !form.endDate}
+                    className="rounded-2xl bg-accent px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    Add Unit
+                  </button>
                 </div>
-              )}
-              <SelectField label="Occupancy Status" value={form.occupancyStatus} options={toOptions(occupancyOptions)} onChange={(value) => onFormChange((current) => ({ ...current, occupancyStatus: value }))} />
-              <SelectField label="Registration Status" value={form.registrationStatus} options={toOptions(registrationOptions)} onChange={(value) => onFormChange((current) => ({ ...current, registrationStatus: value }))} />
-              <SelectField label="Handover Status" value={form.handoverStatus} options={toOptions(handoverOptions)} onChange={(value) => onFormChange((current) => ({ ...current, handoverStatus: value }))} />
-              <SelectField label="Settlement Status" value={form.settlementStatus} options={toOptions(settlementOptions)} onChange={(value) => onFormChange((current) => ({ ...current, settlementStatus: value }))} />
+                <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
+                  <SummaryValue label="Total Units" value={String(totals.count)} />
+                  <SummaryValue label="Total Area" value={`${totals.area.toLocaleString()} sq.ft`} />
+                  <SummaryValue label="Total Benchmark Rent" value={formatMoney(totals.benchmarkRent, selectedUnits[0]?.currency ?? form.currency)} />
+                  <SummaryValue label="Total Negotiated Rent" value={formatMoney(totals.negotiatedRent, selectedUnits[0]?.currency ?? form.currency)} />
+                  <SummaryValue label="Total Variance Amount" value={formatMoney(totals.varianceAmount, selectedUnits[0]?.currency ?? form.currency)} />
+                  <SummaryValue label="Average Variance %" value={`${averageVariance.toFixed(2)}%`} />
+                  <SummaryValue label="Total Deposit" value={formatMoney(totals.deposit, selectedUnits[0]?.currency ?? form.currency)} />
+                  <SummaryValue label="Total Charges" value={formatMoney(totals.charges, selectedUnits[0]?.currency ?? form.currency)} />
+                </div>
+                <div className="max-h-80 overflow-y-auto">
+                  <table className="min-w-[1280px] text-left text-sm">
+                    <thead className="sticky top-0 bg-white text-steel">
+                      <tr>{["Tower", "Unit", "Area", "Rent Frequency", "Benchmark Rent", "Negotiated Rent", "Variance Amount", "Variance %", "Deposit", "Charges", "Action"].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {selectedUnits.length === 0 ? (
+                        <tr><td colSpan={11} className="px-4 py-6 text-center text-sm text-steel">Select period, currency, property, then add units from the popup.</td></tr>
+                      ) : selectedUnits.map((unit) => (
+                        <tr key={unit.unitId} className="border-t border-slate-100">
+                          <td className="px-4 py-3 text-ink">{unit.towerName}</td>
+                          <td className="px-4 py-3 text-steel">{unit.unitNumber}</td>
+                          <td className="px-4 py-3 text-steel">{unit.area} {unit.areaUnit}</td>
+                          <td className="px-4 py-3">
+                            <select value={unit.rentFrequency} onChange={(event) => onUpdateUnit(unit.unitId, { rentFrequency: event.target.value as RentFrequency })} className="w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent">
+                              <option value="MONTHLY">Monthly</option>
+                              <option value="ANNUAL">Annual</option>
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 text-steel">{formatMoney(unit.benchmarkRent, form.currency)}</td>
+                          <td className="px-4 py-3">
+                            <input value={unit.negotiatedRent} type="number" min="0" onChange={(event) => onUpdateUnit(unit.unitId, { negotiatedRent: Number(event.target.value) })} className="w-36 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+                          </td>
+                          <td className="px-4 py-3 text-steel">{formatMoney(leaseUnitVarianceAmount(unit), form.currency)}</td>
+                          <td className="px-4 py-3 text-steel">{leaseUnitVariancePercent(unit).toFixed(2)}%</td>
+                          <td className="px-4 py-3 text-steel">{formatMoney(unit.securityDeposit, unit.currency)}</td>
+                          <td className="px-4 py-3 text-steel">{formatMoney(availableUnitCharges(unit), unit.currency)}</td>
+                          <td className="px-4 py-3">
+                            <button type="button" onClick={() => onRemoveUnit(unit)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">Remove</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <SelectField label="Occupancy Status" value={form.occupancyStatus} options={toOptions(occupancyOptions)} onChange={(value) => onFormChange((current) => ({ ...current, occupancyStatus: value }))} required />
+              <SelectField label="Registration Status" value={form.registrationStatus} options={toOptions(registrationOptions)} onChange={(value) => onFormChange((current) => ({ ...current, registrationStatus: value }))} required />
+              <SelectField label="Handover Status" value={form.handoverStatus} options={toOptions(handoverOptions)} onChange={(value) => onFormChange((current) => ({ ...current, handoverStatus: value }))} required />
+              <SelectField label="Settlement Status" value={form.settlementStatus} options={toOptions(settlementOptions)} onChange={(value) => onFormChange((current) => ({ ...current, settlementStatus: value }))} required />
             </div>
           ) : null}
           {formTab === "fitout" ? (
@@ -1406,8 +1582,8 @@ function LeaseFormModal({
               <InputField label="Free Period End" type="date" value={form.freePeriodEnd} onChange={(value) => onFormChange((current) => ({ ...current, freePeriodEnd: value }))} />
               <InputField label="Fit-Out Start" type="date" value={form.fitOutPeriodStart} onChange={(value) => onFormChange((current) => ({ ...current, fitOutPeriodStart: value }))} />
               <InputField label="Fit-Out End" type="date" value={form.fitOutPeriodEnd} onChange={(value) => onFormChange((current) => ({ ...current, fitOutPeriodEnd: value }))} />
-              <SelectField label="Approval Status" value={form.approvalStatus} options={toOptions(approvalOptions)} onChange={(value) => onFormChange((current) => ({ ...current, approvalStatus: value }))} />
-              <SelectField label="Document Status" value={form.documentStatus} options={toOptions(documentOptions)} onChange={(value) => onFormChange((current) => ({ ...current, documentStatus: value }))} />
+              <SelectField label="Approval Status" value={form.approvalStatus} options={toOptions(approvalOptions)} onChange={(value) => onFormChange((current) => ({ ...current, approvalStatus: value }))} required />
+              <SelectField label="Document Status" value={form.documentStatus} options={toOptions(documentOptions)} onChange={(value) => onFormChange((current) => ({ ...current, documentStatus: value }))} required />
               <label className="md:col-span-2 block text-sm text-ink">
                 <span className="mb-2 block font-medium">Notes</span>
                 <textarea
@@ -1427,6 +1603,133 @@ function LeaseFormModal({
             </button>
           </div>
         </form>
+        {unitSelectorOpen ? (
+          <LeaseUnitSelectionModal
+            title="Add Lease Units"
+            form={form}
+            availableUnits={availableUnits}
+            selectedUnits={selectedUnits}
+            towers={availableTowerOptions.length > 0 ? availableTowerOptions : towerOptions}
+            onClose={() => onUnitSelectorOpen(false)}
+            onFormChange={onFormChange}
+            onSearch={onSearchUnits}
+            onAddUnit={onAddUnit}
+            onRemoveUnit={onRemoveUnit}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LeaseUnitSelectionModal({
+  title,
+  form,
+  availableUnits,
+  selectedUnits,
+  towers,
+  onClose,
+  onFormChange,
+  onSearch,
+  onAddUnit,
+  onRemoveUnit
+}: Readonly<{
+  title: string;
+  form: LeaseFormState;
+  availableUnits: AvailableUnitRecord[];
+  selectedUnits: SelectedAvailableUnit[];
+  towers: { label: string; value: string }[];
+  onClose: () => void;
+  onFormChange: React.Dispatch<React.SetStateAction<LeaseFormState>>;
+  onSearch: (filters?: Partial<UnitSearchFilters>) => void;
+  onAddUnit: (unit: AvailableUnitRecord) => void;
+  onRemoveUnit: (unit: Pick<AvailableUnitRecord, "unitId">) => void;
+}>) {
+  const [filters, setFilters] = useState<UnitSearchFilters>({
+    query: "",
+    propertyId: form.propertyId,
+    towerId: form.towerId,
+    startDate: form.startDate,
+    endDate: form.endDate,
+    floor: "",
+    unitType: "",
+    minArea: "",
+    maxArea: "",
+    minRent: "",
+    maxRent: ""
+  });
+  const selectedUnitIds = useMemo(() => new Set(selectedUnits.map((unit) => unit.unitId)), [selectedUnits]);
+  const visibleUnits = availableUnits
+    .filter((unit) => unit.availabilityStatus === "AVAILABLE")
+    .filter((unit) => String(unit.propertyId) === form.propertyId)
+    .filter((unit) => !filters.towerId || String(unit.towerId) === filters.towerId)
+    .slice(0, 20);
+
+  function runSearch(nextFilters = filters) {
+    onFormChange((current) => ({ ...current, towerId: nextFilters.towerId, unitId: "" }));
+    onSearch({ ...nextFilters, propertyId: form.propertyId });
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4">
+      <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-[28px] bg-white p-6 shadow-card">
+        <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-steel">Unit Selection</p>
+            <h3 className="mt-2 text-xl font-semibold text-ink">{title}</h3>
+            <p className="mt-1 text-sm text-steel">Only available units for the selected property and lease period are shown.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-cloud px-3 py-2 text-sm text-ink">Close</button>
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <input value={filters.query} onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))} placeholder="Search unit" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <select value={filters.towerId} onChange={(event) => setFilters((current) => ({ ...current, towerId: event.target.value }))} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+            <option value="">All available towers</option>
+            {towers.map((tower) => <option key={tower.value} value={tower.value}>{tower.label}</option>)}
+          </select>
+          <input value={filters.floor} onChange={(event) => setFilters((current) => ({ ...current, floor: event.target.value }))} placeholder="Floor" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <select value={filters.unitType} onChange={(event) => setFilters((current) => ({ ...current, unitType: event.target.value }))} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+            <option value="">All unit types</option>
+            {["OFFICE", "APARTMENT", "RETAIL"].map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+          <input value={filters.minArea} onChange={(event) => setFilters((current) => ({ ...current, minArea: event.target.value }))} placeholder="Min area" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <input value={filters.maxArea} onChange={(event) => setFilters((current) => ({ ...current, maxArea: event.target.value }))} placeholder="Max area" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <input value={filters.minRent} onChange={(event) => setFilters((current) => ({ ...current, minRent: event.target.value }))} placeholder="Min rent" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <input value={filters.maxRent} onChange={(event) => setFilters((current) => ({ ...current, maxRent: event.target.value }))} placeholder="Max rent" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button type="button" onClick={() => runSearch()} className="rounded-2xl bg-accent px-5 py-3 text-sm font-medium text-white">Search Available Units</button>
+        </div>
+        <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
+          <table className="min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-steel">
+              <tr>{["Tower", "Floor", "Unit", "Type", "Area", "Monthly Benchmark Rent", "Deposit", "Charges", "Action"].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {visibleUnits.length === 0 ? (
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-steel">No available units matched the current filters.</td></tr>
+              ) : visibleUnits.map((unit) => (
+                <tr key={unit.unitId} className="border-t border-slate-100">
+                  <td className="px-4 py-3 text-ink">{unit.towerName}</td>
+                  <td className="px-4 py-3 text-steel">{unit.floor}</td>
+                  <td className="px-4 py-3 text-steel">{unit.unitNumber}</td>
+                  <td className="px-4 py-3 text-steel">{unit.unitType}</td>
+                  <td className="px-4 py-3 text-steel">{unit.area} {unit.areaUnit}</td>
+                  <td className="px-4 py-3 text-steel">{formatMoney(availableUnitRent(unit, "MONTHLY"), form.currency)}</td>
+                  <td className="px-4 py-3 text-steel">{formatMoney(unit.securityDeposit, unit.currency)}</td>
+                  <td className="px-4 py-3 text-steel">{formatMoney(availableUnitCharges(unit), unit.currency)}</td>
+                  <td className="px-4 py-3">
+                    {selectedUnitIds.has(unit.unitId) ? (
+                      <button type="button" onClick={() => onRemoveUnit(unit)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">Remove</button>
+                    ) : (
+                      <button type="button" onClick={() => onAddUnit(unit)} className="rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white">Add Unit</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -1462,17 +1765,17 @@ function TransactionModal({
             Close
           </button>
         </div>
-        <form className="mt-6 grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
-          <SelectField label="Transaction Status" value={form.transactionStatus} options={toOptions(transactionStatusOptions)} onChange={(value) => onFormChange((current) => ({ ...current, transactionStatus: value }))} />
-          <InputField label="Created By" value={form.createdBy} onChange={(value) => onFormChange((current) => ({ ...current, createdBy: value }))} />
-          <InputField label="Effective Start Date" type="date" value={form.effectiveStartDate} onChange={(value) => onFormChange((current) => ({ ...current, effectiveStartDate: value }))} />
-          <InputField label="Effective End Date" type="date" value={form.effectiveEndDate} onChange={(value) => onFormChange((current) => ({ ...current, effectiveEndDate: value }))} />
+        <form className="mt-6 grid gap-4 md:grid-cols-2" onSubmit={onSubmit} noValidate>
+          <SelectField label="Transaction Status" value={form.transactionStatus} options={toOptions(transactionStatusOptions)} onChange={(value) => onFormChange((current) => ({ ...current, transactionStatus: value }))} required />
+          <InputField label="Created By" value={form.createdBy} onChange={(value) => onFormChange((current) => ({ ...current, createdBy: value }))} required />
+          <InputField label="Effective Start Date" type="date" value={form.effectiveStartDate} onChange={(value) => onFormChange((current) => ({ ...current, effectiveStartDate: value }))} required />
+          <InputField label="Effective End Date" type="date" value={form.effectiveEndDate} onChange={(value) => onFormChange((current) => ({ ...current, effectiveEndDate: value }))} required />
           <InputField label="Revised Rent" type="number" value={form.revisedRentAmount} onChange={(value) => onFormChange((current) => ({ ...current, revisedRentAmount: value }))} />
           <InputField label="Revised Security Deposit" type="number" value={form.revisedSecurityDeposit} onChange={(value) => onFormChange((current) => ({ ...current, revisedSecurityDeposit: value }))} />
           {actionType === "TRANSFER" ? (
-            <SelectField label="Target Unit" value={form.targetUnitId} options={units.map((unit) => ({ value: String(unit.id), label: `${unit.unitCode} · ${unit.unitName}` }))} onChange={(value) => onFormChange((current) => ({ ...current, targetUnitId: value }))} />
+            <SelectField label="Target Unit" value={form.targetUnitId} options={units.map((unit) => ({ value: String(unit.id), label: `${unit.unitCode} · ${unit.unitName}` }))} onChange={(value) => onFormChange((current) => ({ ...current, targetUnitId: value }))} required />
           ) : null}
-          <InputField label="Reason" value={form.reason} onChange={(value) => onFormChange((current) => ({ ...current, reason: value }))} />
+          <InputField label="Reason" value={form.reason} onChange={(value) => onFormChange((current) => ({ ...current, reason: value }))} required />
           <label className="md:col-span-2 block text-sm text-ink">
             <span className="mb-2 block font-medium">Notes</span>
             <textarea
@@ -1499,17 +1802,19 @@ function InputField({
   label,
   type = "text",
   value,
-  onChange
+  onChange,
+  required = false
 }: Readonly<{
   label: string;
   type?: string;
   value: string;
   onChange: (value: string) => void;
+  required?: boolean;
 }>) {
   return (
     <label className="block text-sm text-ink">
-      <span className="mb-2 block font-medium">{label}</span>
-      <input type={type} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-accent focus:bg-white" />
+      <span className="mb-2 block font-medium">{label}{required ? <span className="text-rose-600"> *</span> : null}</span>
+      <input required={required} type={type} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-accent focus:bg-white" />
     </label>
   );
 }
@@ -1527,17 +1832,19 @@ function SelectField({
   label,
   value,
   options,
-  onChange
+  onChange,
+  required = false
 }: Readonly<{
   label: string;
   value: string;
   options: Option[];
   onChange: (value: string) => void;
+  required?: boolean;
 }>) {
   return (
     <label className="block text-sm text-ink">
-      <span className="mb-2 block font-medium">{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-accent focus:bg-white">
+      <span className="mb-2 block font-medium">{label}{required ? <span className="text-rose-600"> *</span> : null}</span>
+      <select required={required} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 outline-none transition focus:border-accent focus:bg-white">
         <option value="">Select</option>
         {options.map((option) => (
           <option key={option.value} value={option.value}>

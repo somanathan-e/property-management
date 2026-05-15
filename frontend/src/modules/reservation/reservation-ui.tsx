@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/layouts/app-shell";
 import { apiGet, apiPost, apiPut } from "@/services/api";
 import type { PagedResult } from "@/types/api";
-import type { AvailableUnitRecord, CustomerRecord, LeaseRecord, PropertyRecord, ReservationHistoryRecord, ReservationRecord, ReservationUnitRecord } from "@/types/entities";
+import type { AvailableUnitRecord, CustomerRecord, LeaseRecord, PropertyRecord, ReservationHistoryRecord, ReservationRecord } from "@/types/entities";
 
 type TowerOption = {
   id: number;
@@ -25,6 +25,25 @@ type ReservationFormState = Record<string, string>;
 type WorkflowFormState = Record<string, string>;
 type ConvertFormState = Record<string, string>;
 type UnitTransactionMode = "SINGLE" | "MULTIPLE";
+type RentFrequency = "MONTHLY" | "ANNUAL";
+type SelectedAvailableUnit = AvailableUnitRecord & {
+  rentFrequency: RentFrequency;
+  benchmarkRent: number;
+  negotiatedRent: number;
+};
+type UnitSearchFilters = {
+  query: string;
+  propertyId: string;
+  towerId: string;
+  startDate: string;
+  endDate: string;
+  floor: string;
+  unitType: string;
+  minArea: string;
+  maxArea: string;
+  minRent: string;
+  maxRent: string;
+};
 
 const reservationStatusOptions = ["DRAFT", "RESERVED", "EXPIRED", "CANCELLED", "CONVERTED_TO_LEASE"];
 const workflowStatusOptions = ["DRAFT", "SUBMITTED", "UNDER_REVIEW", "APPROVED", "REJECTED", "ESCALATED"];
@@ -49,6 +68,7 @@ function buildReservationForm(record?: ReservationRecord | null): ReservationFor
     expiryDate: record?.expiryDate ?? "",
     proposedLeaseStartDate: record?.proposedLeaseStartDate ?? "",
     proposedLeaseEndDate: record?.proposedLeaseEndDate ?? "",
+    rentFrequency: "MONTHLY",
     quotedRent: record ? String(record.quotedRent) : "",
     currency: record?.currency ?? "AED",
     depositAmount: record ? String(record.depositAmount) : "",
@@ -97,26 +117,62 @@ function formatMoney(value: number, currency: string) {
   return `${currency} ${value.toLocaleString()}`;
 }
 
+function firstMissingField(form: Record<string, string>, fields: { name: string; label: string }[]) {
+  return fields.find((field) => !String(form[field.name] ?? "").trim())?.label ?? null;
+}
+
+function unitRent(unit: AvailableUnitRecord, rentFrequency: string) {
+  return rentFrequency === "ANNUAL" ? unit.monthlyRent * 12 : unit.monthlyRent;
+}
+
+function buildSelectedUnit(unit: AvailableUnitRecord, rentFrequency: RentFrequency = "MONTHLY"): SelectedAvailableUnit {
+  const benchmarkRent = unitRent(unit, rentFrequency);
+  return {
+    ...unit,
+    rentFrequency,
+    benchmarkRent,
+    negotiatedRent: benchmarkRent
+  };
+}
+
 function unitCharges(unit: AvailableUnitRecord) {
   return unit.maintenanceCharges + unit.camCharges + unit.parkingCharges + Math.round(unit.monthlyRent * 0.05);
 }
 
-function selectedUnitTotals(units: AvailableUnitRecord[]) {
+function unitVarianceAmount(unit: SelectedAvailableUnit) {
+  return unit.negotiatedRent - unit.benchmarkRent;
+}
+
+function unitVariancePercent(unit: SelectedAvailableUnit) {
+  return unit.benchmarkRent > 0 ? (unitVarianceAmount(unit) / unit.benchmarkRent) * 100 : 0;
+}
+
+function selectedUnitTotals(units: SelectedAvailableUnit[]) {
   return units.reduce(
     (totals, unit) => ({
+      count: totals.count + 1,
       area: totals.area + unit.area,
-      rent: totals.rent + unit.monthlyRent,
+      benchmarkRent: totals.benchmarkRent + unit.benchmarkRent,
+      negotiatedRent: totals.negotiatedRent + unit.negotiatedRent,
+      varianceAmount: totals.varianceAmount + unitVarianceAmount(unit),
       deposit: totals.deposit + unit.securityDeposit,
       charges: totals.charges + unitCharges(unit)
     }),
-    { area: 0, rent: 0, deposit: 0, charges: 0 }
+    { count: 0, area: 0, benchmarkRent: 0, negotiatedRent: 0, varianceAmount: 0, deposit: 0, charges: 0 }
   );
+}
+
+function averageVariancePercent(units: SelectedAvailableUnit[]) {
+  if (units.length === 0) {
+    return 0;
+  }
+  return units.reduce((sum, unit) => sum + unitVariancePercent(unit), 0) / units.length;
 }
 
 export function ReservationWorkspacePage() {
   const [records, setRecords] = useState<ReservationRecord[]>([]);
   const [availableUnits, setAvailableUnits] = useState<AvailableUnitRecord[]>([]);
-  const [selectedUnits, setSelectedUnits] = useState<AvailableUnitRecord[]>([]);
+  const [selectedUnits, setSelectedUnits] = useState<SelectedAvailableUnit[]>([]);
   const [search, setSearch] = useState("");
   const [availabilityFilters, setAvailabilityFilters] = useState<Record<string, string>>({
     propertyId: "",
@@ -146,6 +202,7 @@ export function ReservationWorkspacePage() {
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
   const [editingReservation, setEditingReservation] = useState<ReservationRecord | null>(null);
   const [reservationFormOpen, setReservationFormOpen] = useState(false);
+  const [unitSelectorOpen, setUnitSelectorOpen] = useState(false);
   const [reservationForm, setReservationForm] = useState<ReservationFormState>(() => buildReservationForm(null));
   const [reservationUnitMode, setReservationUnitMode] = useState<UnitTransactionMode>("SINGLE");
   const [workflowReservation, setWorkflowReservation] = useState<ReservationRecord | null>(null);
@@ -200,22 +257,42 @@ export function ReservationWorkspacePage() {
     }
   }
 
-  async function searchReservationUnitsForForm(unitSearch = "") {
+  async function searchReservationUnitsForForm(filters?: Partial<UnitSearchFilters>) {
     const params = new URLSearchParams();
     params.set("page", "1");
     params.set("size", "100");
-    const startDate = reservationForm.proposedLeaseStartDate || reservationForm.reservationDate || todayText();
-    const endDate = reservationForm.proposedLeaseEndDate || reservationForm.expiryDate || startDate;
+    const startDate = filters?.startDate || reservationForm.proposedLeaseStartDate || reservationForm.reservationDate || todayText();
+    const endDate = filters?.endDate || reservationForm.proposedLeaseEndDate || reservationForm.expiryDate || startDate;
     params.set("startDate", startDate);
     params.set("endDate", endDate);
-    if (reservationForm.propertyId) {
-      params.set("propertyId", reservationForm.propertyId);
+    const propertyId = filters?.propertyId ?? reservationForm.propertyId;
+    if (propertyId) {
+      params.set("propertyId", propertyId);
     }
-    if (reservationForm.towerId) {
-      params.set("towerId", reservationForm.towerId);
+    const towerId = filters?.towerId ?? reservationForm.towerId;
+    if (towerId) {
+      params.set("towerId", towerId);
     }
-    if (unitSearch.trim()) {
-      params.set("unitSearch", unitSearch.trim());
+    if (filters?.query?.trim()) {
+      params.set("unitSearch", filters.query.trim());
+    }
+    if (filters?.floor?.trim()) {
+      params.set("floor", filters.floor.trim());
+    }
+    if (filters?.unitType) {
+      params.set("unitType", filters.unitType);
+    }
+    if (filters?.minArea) {
+      params.set("minArea", filters.minArea);
+    }
+    if (filters?.maxArea) {
+      params.set("maxArea", filters.maxArea);
+    }
+    if (filters?.minRent) {
+      params.set("minRent", filters.minRent);
+    }
+    if (filters?.maxRent) {
+      params.set("maxRent", filters.maxRent);
     }
     try {
       const result = await apiGet<PagedResult<AvailableUnitRecord>>(`/reservations/available-units?${params.toString()}`);
@@ -257,20 +334,21 @@ export function ReservationWorkspacePage() {
   }, [records]);
 
   function openCreate(unit?: AvailableUnitRecord) {
-    const unitsForReservation = unit ? [unit] : selectedUnits;
+    const unitsForReservation = unit ? [buildSelectedUnit(unit)] : selectedUnits;
     const primaryUnit = unitsForReservation[0];
+    const formBase = buildReservationForm(null);
     const totals = selectedUnitTotals(unitsForReservation);
     setSelectedUnits(unitsForReservation);
     setReservationUnitMode(unitsForReservation.length > 1 ? "MULTIPLE" : "SINGLE");
     setEditingReservation(null);
     setReservationForm({
-      ...buildReservationForm(null),
+      ...formBase,
       propertyId: primaryUnit ? String(primaryUnit.propertyId) : "",
       towerId: primaryUnit ? String(primaryUnit.towerId) : "",
       unitId: primaryUnit ? String(primaryUnit.unitId) : "",
       reservationStatus: primaryUnit ? "RESERVED" : "DRAFT",
       workflowStatus: primaryUnit ? "APPROVED" : "DRAFT",
-      quotedRent: primaryUnit ? String(totals.rent) : "",
+      quotedRent: primaryUnit ? String(totals.negotiatedRent) : "",
       currency: primaryUnit?.currency ?? "AED",
       depositAmount: primaryUnit ? String(totals.deposit) : "",
       proposedLeaseStartDate: primaryUnit?.availableFromDate ?? "",
@@ -293,24 +371,67 @@ export function ReservationWorkspacePage() {
       setError("Multiple-unit reservations can include units from one property only.");
       return;
     }
-    setSelectedUnits((current) => [...current, unit]);
+    if (unit.currency !== reservationForm.currency) {
+      setError("Selected units must use the reservation currency.");
+      return;
+    }
+    const selectedUnit = buildSelectedUnit(unit);
+    setSelectedUnits((current) => [...current, selectedUnit]);
     setReservationForm((current) => {
-      const nextUnits = [...selectedUnits, unit];
+      const nextUnits = [...selectedUnits, selectedUnit];
       const totals = selectedUnitTotals(nextUnits);
       return {
         ...current,
         propertyId: String(unit.propertyId),
         towerId: current.towerId || String(unit.towerId),
         unitId: String(nextUnits[0].unitId),
-        quotedRent: String(totals.rent),
+        quotedRent: String(totals.negotiatedRent),
         depositAmount: String(totals.deposit),
         currency: unit.currency
       };
     });
   }
 
-  function removeSelectedUnit(unit: AvailableUnitRecord) {
-    setSelectedUnits((current) => current.filter((item) => item.unitId !== unit.unitId));
+  function removeSelectedUnit(unit: Pick<AvailableUnitRecord, "unitId">) {
+    setSelectedUnits((current) => {
+      const nextUnits = current.filter((item) => item.unitId !== unit.unitId);
+      const totals = selectedUnitTotals(nextUnits);
+      setReservationForm((form) => ({
+        ...form,
+        propertyId: nextUnits[0] ? String(nextUnits[0].propertyId) : form.propertyId,
+        towerId: nextUnits[0] ? String(nextUnits[0].towerId) : form.towerId,
+        unitId: nextUnits[0] ? String(nextUnits[0].unitId) : "",
+        quotedRent: nextUnits.length > 0 ? String(totals.negotiatedRent) : "",
+        depositAmount: nextUnits.length > 0 ? String(totals.deposit) : ""
+      }));
+      return nextUnits;
+    });
+  }
+
+  function updateSelectedUnit(unitId: number, changes: Partial<Pick<SelectedAvailableUnit, "rentFrequency" | "negotiatedRent">>) {
+    setSelectedUnits((current) => {
+      const nextUnits = current.map((unit) => {
+        if (unit.unitId !== unitId) {
+          return unit;
+        }
+        const rentFrequency = changes.rentFrequency ?? unit.rentFrequency;
+        const benchmarkRent = unitRent(unit, rentFrequency);
+        const negotiatedRent = changes.negotiatedRent ?? (changes.rentFrequency ? benchmarkRent : unit.negotiatedRent);
+        return {
+          ...unit,
+          rentFrequency,
+          benchmarkRent,
+          negotiatedRent
+        };
+      });
+      const totals = selectedUnitTotals(nextUnits);
+      setReservationForm((form) => ({
+        ...form,
+        quotedRent: nextUnits.length > 0 ? String(totals.negotiatedRent) : "",
+        depositAmount: nextUnits.length > 0 ? String(totals.deposit) : ""
+      }));
+      return nextUnits;
+    });
   }
 
   function toggleSelectedUnit(unit: AvailableUnitRecord) {
@@ -326,7 +447,11 @@ export function ReservationWorkspacePage() {
         setError("Multiple-unit reservations can include units from one property only.");
         return current;
       }
-      return [...current, unit];
+      if (unit.currency !== reservationForm.currency) {
+        setError("Selected units must use the reservation currency.");
+        return current;
+      }
+      return [...current, buildSelectedUnit(unit)];
     });
   }
 
@@ -361,31 +486,57 @@ export function ReservationWorkspacePage() {
   async function submitReservation(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError(null);
-    const multiUnitSelected = reservationUnitMode === "MULTIPLE";
-    const unitsForPayload = multiUnitSelected ? selectedUnits : [];
-    if (multiUnitSelected && unitsForPayload.length === 0) {
-      setError("Select at least one available unit for a multiple-unit reservation.");
+    const missingField = firstMissingField(reservationForm, [
+      { name: "reservationNumber", label: "Reservation Number" },
+      { name: "customerId", label: "Customer" },
+      { name: "reservationDate", label: "Reservation Date" },
+      { name: "expiryDate", label: "Expiry Date" },
+      { name: "proposedLeaseStartDate", label: "Proposed Lease Start Date" },
+      { name: "proposedLeaseEndDate", label: "Proposed Lease End Date" },
+      { name: "propertyId", label: "Property" },
+      { name: "reservationStatus", label: "Reservation Status" },
+      { name: "workflowStatus", label: "Workflow Status" },
+      { name: "paymentStatus", label: "Payment Status" },
+      { name: "currency", label: "Currency" },
+      { name: "createdBy", label: "Created By" }
+    ]);
+    if (missingField) {
+      setError(`${missingField} is required.`);
       return;
     }
-    if (multiUnitSelected && new Set(unitsForPayload.map((unit) => unit.unitId)).size !== unitsForPayload.length) {
+    const unitsForPayload = selectedUnits;
+    const hasSelectedUnits = unitsForPayload.length > 0;
+    if (!editingReservation && !hasSelectedUnits) {
+      setError("Select at least one available unit for the reservation.");
+      return;
+    }
+    if (hasSelectedUnits && new Set(unitsForPayload.map((unit) => unit.unitId)).size !== unitsForPayload.length) {
       setError("Duplicate units are not allowed in the same reservation.");
       return;
     }
-    if (multiUnitSelected && unitsForPayload.some((unit) => unit.availabilityStatus !== "AVAILABLE")) {
+    if (hasSelectedUnits && unitsForPayload.some((unit) => unit.availabilityStatus !== "AVAILABLE")) {
       setError("Inactive, reserved, or unavailable units cannot be selected.");
       return;
     }
-    if (multiUnitSelected && new Set(unitsForPayload.map((unit) => unit.propertyId)).size > 1) {
-      setError("Multiple-unit reservations can include units from one property only.");
+    if (hasSelectedUnits && new Set(unitsForPayload.map((unit) => unit.propertyId)).size > 1) {
+      setError("Reservation units must belong to one property only.");
       return;
     }
-    const primaryMultiUnit = unitsForPayload[0];
-    const multiTotals = selectedUnitTotals(unitsForPayload);
+    const primaryUnit = unitsForPayload[0];
+    if (hasSelectedUnits && new Set(unitsForPayload.map((unit) => unit.currency)).size > 1) {
+      setError("Reservation units must use one currency only.");
+      return;
+    }
+    if (hasSelectedUnits && unitsForPayload.some((unit) => unit.negotiatedRent < 0)) {
+      setError("Negotiated rent cannot be negative.");
+      return;
+    }
+    const selectedTotals = selectedUnitTotals(unitsForPayload);
     const payload = {
       reservationNumber: reservationForm.reservationNumber,
-      propertyId: multiUnitSelected ? primaryMultiUnit.propertyId : Number(reservationForm.propertyId),
-      towerId: multiUnitSelected ? primaryMultiUnit.towerId : Number(reservationForm.towerId),
-      unitId: multiUnitSelected ? primaryMultiUnit.unitId : Number(reservationForm.unitId),
+      propertyId: hasSelectedUnits ? primaryUnit.propertyId : Number(reservationForm.propertyId),
+      towerId: hasSelectedUnits ? primaryUnit.towerId : Number(reservationForm.towerId),
+      unitId: hasSelectedUnits ? primaryUnit.unitId : Number(reservationForm.unitId),
       customerId: Number(reservationForm.customerId),
       reservationStatus: reservationForm.reservationStatus,
       workflowStatus: reservationForm.workflowStatus,
@@ -394,13 +545,13 @@ export function ReservationWorkspacePage() {
       expiryDate: reservationForm.expiryDate,
       proposedLeaseStartDate: reservationForm.proposedLeaseStartDate,
       proposedLeaseEndDate: reservationForm.proposedLeaseEndDate,
-      quotedRent: multiUnitSelected ? multiTotals.rent : Number(reservationForm.quotedRent),
+      quotedRent: hasSelectedUnits ? selectedTotals.negotiatedRent : Number(reservationForm.quotedRent),
       currency: reservationForm.currency,
-      depositAmount: multiUnitSelected ? multiTotals.deposit : Number(reservationForm.depositAmount),
+      depositAmount: hasSelectedUnits ? selectedTotals.deposit : Number(reservationForm.depositAmount),
       createdBy: reservationForm.createdBy,
       leadName: reservationForm.leadName || null,
       notes: reservationForm.notes || null,
-      units: multiUnitSelected
+      units: hasSelectedUnits
         ? unitsForPayload.map((unit) => ({
             propertyId: unit.propertyId,
             towerId: unit.towerId,
@@ -408,7 +559,7 @@ export function ReservationWorkspacePage() {
             unitNumber: unit.unitNumber,
             unitType: unit.unitType,
             area: unit.area,
-            rent: unit.monthlyRent,
+            rent: unit.negotiatedRent,
             deposit: unit.securityDeposit,
             tax: unitCharges(unit),
             reservationStatus: reservationForm.reservationStatus
@@ -454,6 +605,16 @@ export function ReservationWorkspacePage() {
     if (!workflowReservation || !workflowForm) {
       return;
     }
+    const missingField = firstMissingField(workflowForm, [
+      { name: "reservationStatus", label: "Reservation Status" },
+      { name: "workflowStatus", label: "Workflow Status" },
+      { name: "paymentStatus", label: "Payment Status" },
+      { name: "updatedBy", label: "Updated By" }
+    ]);
+    if (missingField) {
+      setError(`${missingField} is required.`);
+      return;
+    }
     try {
       await apiPost(`/reservations/${workflowReservation.id}/workflow`, workflowForm);
       setWorkflowReservation(null);
@@ -468,6 +629,17 @@ export function ReservationWorkspacePage() {
   async function submitConvert(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!convertReservation || !convertForm) {
+      return;
+    }
+    const missingField = firstMissingField(convertForm, [
+      { name: "leaseNumber", label: "Lease Number" },
+      { name: "leaseType", label: "Lease Type" },
+      { name: "startDate", label: "Start Date" },
+      { name: "endDate", label: "End Date" },
+      { name: "createdBy", label: "Created By" }
+    ]);
+    if (missingField) {
+      setError(`${missingField} is required.`);
       return;
     }
     try {
@@ -742,21 +914,24 @@ export function ReservationWorkspacePage() {
             customers={customers}
             availableUnits={availableUnits}
             selectedUnits={selectedUnits}
+            unitSelectorOpen={unitSelectorOpen}
             unitMode={reservationUnitMode}
             onClose={closeForm}
             onSubmit={submitReservation}
             onChange={setReservationForm}
+            onUnitSelectorOpen={setUnitSelectorOpen}
             onUnitModeChange={(mode) => {
               setReservationUnitMode(mode);
               if (mode === "SINGLE") {
                 setSelectedUnits([]);
               } else {
-                void searchReservationUnitsForForm();
+                void searchReservationUnitsForForm({});
               }
             }}
             onSearchUnits={searchReservationUnitsForForm}
             onAddUnit={addSelectedUnit}
             onRemoveUnit={removeSelectedUnit}
+            onUpdateUnit={updateSelectedUnit}
           />
         ) : null}
 
@@ -781,14 +956,17 @@ function ReservationFormModal({
   customers,
   availableUnits,
   selectedUnits,
+  unitSelectorOpen,
   unitMode,
   onClose,
   onSubmit,
   onChange,
+  onUnitSelectorOpen,
   onUnitModeChange,
   onSearchUnits,
   onAddUnit,
-  onRemoveUnit
+  onRemoveUnit,
+  onUpdateUnit
 }: Readonly<{
   editing: boolean;
   form: ReservationFormState;
@@ -797,19 +975,22 @@ function ReservationFormModal({
   units: UnitOption[];
   customers: CustomerRecord[];
   availableUnits: AvailableUnitRecord[];
-  selectedUnits: AvailableUnitRecord[];
+  selectedUnits: SelectedAvailableUnit[];
+  unitSelectorOpen: boolean;
   unitMode: UnitTransactionMode;
   onClose: () => void;
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
   onChange: React.Dispatch<React.SetStateAction<ReservationFormState>>;
+  onUnitSelectorOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onUnitModeChange: (mode: UnitTransactionMode) => void;
-  onSearchUnits: (unitSearch?: string) => void;
+  onSearchUnits: (filters?: Partial<UnitSearchFilters>) => void;
   onAddUnit: (unit: AvailableUnitRecord) => void;
-  onRemoveUnit: (unit: AvailableUnitRecord) => void;
+  onRemoveUnit: (unit: Pick<AvailableUnitRecord, "unitId">) => void;
+  onUpdateUnit: (unitId: number, changes: Partial<Pick<SelectedAvailableUnit, "rentFrequency" | "negotiatedRent">>) => void;
 }>) {
-  const [unitSearch, setUnitSearch] = useState("");
   const totals = selectedUnitTotals(selectedUnits);
-  const selectedUnitIds = useMemo(() => new Set(selectedUnits.map((unit) => unit.unitId)), [selectedUnits]);
+  const averageVariance = averageVariancePercent(selectedUnits);
+  const selectionLabel = selectedUnits.length <= 1 ? "Single Unit" : "Multi-Unit";
   const availableProperties = useMemo(() => {
     const propertyMap = new Map<string, string>();
     availableUnits.forEach((unit) => propertyMap.set(String(unit.propertyId), unit.propertyName));
@@ -822,129 +1003,112 @@ function ReservationFormModal({
       .forEach((unit) => towerMap.set(String(unit.towerId), unit.towerName));
     return Array.from(towerMap, ([value, label]) => ({ value, label }));
   }, [availableUnits, form.propertyId]);
-  const unitMatches = availableUnits
-    .filter((unit) => !form.propertyId || String(unit.propertyId) === form.propertyId)
-    .filter((unit) => !form.towerId || String(unit.towerId) === form.towerId)
-    .filter((unit) => unitSearch.trim().length === 0 || unit.unitNumber.toLowerCase().includes(unitSearch.trim().toLowerCase()))
-    .slice(0, 10);
-  const selectedPropertyId = selectedUnits[0] ? String(selectedUnits[0].propertyId) : "";
+  const periodSelected = Boolean(form.proposedLeaseStartDate && form.proposedLeaseEndDate);
+  const propertyOptions = periodSelected ? availableProperties : properties.map((item) => ({ label: item.propertyName, value: String(item.id) }));
+  const towerOptions = availableTowers.length > 0 ? availableTowers : towers.filter((tower) => !form.propertyId || availableUnits.some((unit) => String(unit.towerId) === String(tower.id))).map((item) => ({ label: item.towerName, value: String(item.id) }));
+  const selectedPropertyId = selectedUnits[0] ? String(selectedUnits[0].propertyId) : form.propertyId;
 
   return (
     <Modal title={editing ? "Edit Reservation" : "Create Reservation"} onClose={onClose}>
-      <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
-        {!editing ? (
-          <div className="md:col-span-2 rounded-2xl border border-slate-200 bg-slate-50 p-2">
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(["SINGLE", "MULTIPLE"] as UnitTransactionMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => onUnitModeChange(mode)}
-                  className={["rounded-xl px-4 py-3 text-sm font-medium", unitMode === mode ? "bg-white text-accent shadow-sm" : "text-steel hover:bg-white"].join(" ")}
-                >
-                  {mode === "SINGLE" ? "Single Unit" : "Multiple Units"}
-                </button>
-              ))}
+      <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit} noValidate>
+        <Field label="Reservation Number" name="reservationNumber" value={form.reservationNumber} onChange={onChange} required />
+        <SelectField label="Customer" name="customerId" value={form.customerId} onChange={onChange} options={customers.map((item) => ({ label: item.customerName, value: String(item.id) }))} required />
+        <Field label="Reservation Date" name="reservationDate" type="date" value={form.reservationDate} onChange={onChange} required />
+        <Field label="Expiry Date" name="expiryDate" type="date" value={form.expiryDate} onChange={onChange} required />
+        <Field
+          label="Proposed Lease Start Date"
+          name="proposedLeaseStartDate"
+          type="date"
+          value={form.proposedLeaseStartDate}
+          required
+          onChange={(updater: React.SetStateAction<ReservationFormState>) => {
+            const next = typeof updater === "function" ? updater(form) : updater;
+            onChange(next);
+            if (next.proposedLeaseStartDate && next.proposedLeaseEndDate) {
+              onSearchUnits({ startDate: next.proposedLeaseStartDate, endDate: next.proposedLeaseEndDate });
+            }
+          }}
+        />
+        <Field
+          label="Proposed Lease End Date"
+          name="proposedLeaseEndDate"
+          type="date"
+          value={form.proposedLeaseEndDate}
+          required
+          onChange={(updater: React.SetStateAction<ReservationFormState>) => {
+            const next = typeof updater === "function" ? updater(form) : updater;
+            onChange(next);
+            if (next.proposedLeaseStartDate && next.proposedLeaseEndDate) {
+              onSearchUnits({ startDate: next.proposedLeaseStartDate, endDate: next.proposedLeaseEndDate });
+            }
+          }}
+        />
+        <Field label="Currency" name="currency" value={form.currency} onChange={onChange} required />
+        <SelectField
+          label="Property"
+          name="propertyId"
+          value={selectedPropertyId}
+          required
+          onChange={(updater: React.SetStateAction<ReservationFormState>) => {
+            const next = typeof updater === "function" ? updater(form) : updater;
+            onChange((current) => ({ ...current, propertyId: next.propertyId, towerId: "", unitId: "" }));
+            onSearchUnits({ propertyId: next.propertyId });
+          }}
+          options={propertyOptions}
+        />
+        <div className="md:col-span-2 rounded-2xl border border-slate-200">
+          <div className="flex flex-col gap-3 border-b border-slate-200 p-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.16em] text-steel">Selected Units</p>
+              <p className="mt-1 text-sm font-medium text-ink">{selectionLabel} · {selectedUnits.length} selected</p>
             </div>
+            <button
+              type="button"
+              onClick={() => {
+                onUnitSelectorOpen(true);
+                onSearchUnits({});
+              }}
+              disabled={!form.propertyId || !form.proposedLeaseStartDate || !form.proposedLeaseEndDate}
+              className="rounded-2xl bg-accent px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Add Unit
+            </button>
           </div>
-        ) : null}
-        <Field label="Reservation Number" name="reservationNumber" value={form.reservationNumber} onChange={onChange} />
-        <SelectField label="Customer" name="customerId" value={form.customerId} onChange={onChange} options={customers.map((item) => ({ label: item.customerName, value: String(item.id) }))} />
-        {unitMode === "SINGLE" || editing ? (
-          <>
-            <SelectField label="Property" name="propertyId" value={form.propertyId} onChange={onChange} options={properties.map((item) => ({ label: item.propertyName, value: String(item.id) }))} />
-            <SelectField label="Tower" name="towerId" value={form.towerId} onChange={onChange} options={towers.map((item) => ({ label: item.towerName, value: String(item.id) }))} />
-            <SelectField label="Unit" name="unitId" value={form.unitId} onChange={onChange} options={units.map((item) => ({ label: `${item.unitCode} · ${item.unitName}`, value: String(item.id) }))} />
-          </>
-        ) : (
-          <div className="md:col-span-2 rounded-2xl border border-slate-200">
-            <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-3">
-              <label className="block text-sm text-ink">
-                <span className="mb-2 block font-medium">Property</span>
-                <select
-                  value={form.propertyId || selectedPropertyId}
-                  onChange={(event) => {
-                    onChange((current) => ({ ...current, propertyId: event.target.value, towerId: "", unitId: "" }));
-                    setUnitSearch("");
-                    setTimeout(() => onSearchUnits(""), 0);
-                  }}
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent"
-                >
-                  <option value="">Select</option>
-                  {(availableProperties.length > 0 ? availableProperties : properties.map((item) => ({ label: item.propertyName, value: String(item.id) }))).map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm text-ink">
-                <span className="mb-2 block font-medium">Tower</span>
-                <select
-                  value={form.towerId}
-                  onChange={(event) => {
-                    onChange((current) => ({ ...current, towerId: event.target.value, unitId: "" }));
-                    setUnitSearch("");
-                    setTimeout(() => onSearchUnits(""), 0);
-                  }}
-                  className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent"
-                >
-                  <option value="">Select</option>
-                  {(availableTowers.length > 0 ? availableTowers : towers.map((item) => ({ label: item.towerName, value: String(item.id) }))).map((option) => (
-                    <option key={option.value} value={option.value}>{option.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="block text-sm text-ink">
-                <span className="mb-2 block font-medium">Search Unit</span>
-                <div className="flex gap-2">
-                  <input
-                    value={unitSearch}
-                    onChange={(event) => setUnitSearch(event.target.value)}
-                    placeholder="Unit number"
-                    className="min-w-0 flex-1 rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent"
-                  />
-                  <button type="button" onClick={() => onSearchUnits(unitSearch)} className="rounded-2xl bg-accent px-4 py-3 text-sm font-medium text-white">
-                    Search
-                  </button>
-                </div>
-              </label>
-            </div>
-            {unitMatches.length > 0 ? (
-              <div className="border-b border-slate-200 p-4">
-                <div className="grid gap-2 md:grid-cols-2">
-                  {unitMatches.map((unit) => (
-                    <div key={unit.unitId} className="flex items-center justify-between gap-3 rounded-2xl bg-slate-50 px-4 py-3">
-                      <div>
-                        <p className="text-sm font-medium text-ink">{unit.unitNumber}</p>
-                        <p className="mt-1 text-xs text-steel">{unit.towerName} · Floor {unit.floor} · {unit.area} {unit.areaUnit}</p>
-                      </div>
-                      <button type="button" disabled={selectedUnitIds.has(unit.unitId)} onClick={() => onAddUnit(unit)} className="rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white disabled:opacity-40">
-                        Add Unit
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-4 sm:grid-cols-4">
+            <div className="grid gap-3 border-b border-slate-200 bg-slate-50 p-4 sm:grid-cols-2 xl:grid-cols-4">
+              <Info label="Total Units" value={String(totals.count)} />
               <Info label="Total Area" value={`${totals.area.toLocaleString()} sq.ft`} />
-              <Info label="Total Rent" value={formatMoney(totals.rent, selectedUnits[0]?.currency ?? form.currency)} />
+              <Info label="Total Benchmark Rent" value={formatMoney(totals.benchmarkRent, selectedUnits[0]?.currency ?? form.currency)} />
+              <Info label="Total Negotiated Rent" value={formatMoney(totals.negotiatedRent, selectedUnits[0]?.currency ?? form.currency)} />
+              <Info label="Total Variance Amount" value={formatMoney(totals.varianceAmount, selectedUnits[0]?.currency ?? form.currency)} />
+              <Info label="Average Variance %" value={`${averageVariance.toFixed(2)}%`} />
               <Info label="Total Deposit" value={formatMoney(totals.deposit, selectedUnits[0]?.currency ?? form.currency)} />
               <Info label="Total Charges" value={formatMoney(totals.charges, selectedUnits[0]?.currency ?? form.currency)} />
             </div>
             <div className="max-h-80 overflow-y-auto">
-              <table className="min-w-full text-left text-sm">
+              <table className="min-w-[1280px] text-left text-sm">
                 <thead className="sticky top-0 bg-white text-steel">
-                  <tr>{["Unit Number", "Floor", "Area", "Rent", "Deposit", "Charges", "Action"].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr>
+                  <tr>{["Tower", "Unit", "Area", "Rent Frequency", "Benchmark Rent", "Negotiated Rent", "Variance Amount", "Variance %", "Deposit", "Charges", "Action"].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr>
                 </thead>
                 <tbody>
                   {selectedUnits.length === 0 ? (
-                    <tr><td colSpan={7} className="px-4 py-6 text-center text-sm text-steel">Search and add units one by one.</td></tr>
+                    <tr><td colSpan={11} className="px-4 py-6 text-center text-sm text-steel">Select period, currency, property, then add units from the popup.</td></tr>
                   ) : selectedUnits.map((unit) => (
                     <tr key={unit.unitId} className="border-t border-slate-100">
-                      <td className="px-4 py-3 text-ink">{unit.unitNumber}</td>
-                      <td className="px-4 py-3 text-steel">{unit.floor}</td>
+                      <td className="px-4 py-3 text-ink">{unit.towerName}</td>
+                      <td className="px-4 py-3 text-steel">{unit.unitNumber}</td>
                       <td className="px-4 py-3 text-steel">{unit.area} {unit.areaUnit}</td>
-                      <td className="px-4 py-3 text-steel">{formatMoney(unit.monthlyRent, unit.currency)}</td>
+                      <td className="px-4 py-3">
+                        <select value={unit.rentFrequency} onChange={(event) => onUpdateUnit(unit.unitId, { rentFrequency: event.target.value as RentFrequency })} className="w-32 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent">
+                          <option value="MONTHLY">Monthly</option>
+                          <option value="ANNUAL">Annual</option>
+                        </select>
+                      </td>
+                      <td className="px-4 py-3 text-steel">{formatMoney(unit.benchmarkRent, form.currency)}</td>
+                      <td className="px-4 py-3">
+                        <input value={unit.negotiatedRent} type="number" min="0" onChange={(event) => onUpdateUnit(unit.unitId, { negotiatedRent: Number(event.target.value) })} className="w-36 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none focus:border-accent" />
+                      </td>
+                      <td className="px-4 py-3 text-steel">{formatMoney(unitVarianceAmount(unit), form.currency)}</td>
+                      <td className="px-4 py-3 text-steel">{unitVariancePercent(unit).toFixed(2)}%</td>
                       <td className="px-4 py-3 text-steel">{formatMoney(unit.securityDeposit, unit.currency)}</td>
                       <td className="px-4 py-3 text-steel">{formatMoney(unitCharges(unit), unit.currency)}</td>
                       <td className="px-4 py-3">
@@ -955,19 +1119,13 @@ function ReservationFormModal({
                 </tbody>
               </table>
             </div>
-          </div>
-        )}
-        <SelectField label="Reservation Status" name="reservationStatus" value={form.reservationStatus} onChange={onChange} options={reservationStatusOptions.map((item) => ({ label: item, value: item }))} />
-        <SelectField label="Workflow Status" name="workflowStatus" value={form.workflowStatus} onChange={onChange} options={workflowStatusOptions.map((item) => ({ label: item, value: item }))} />
-        <SelectField label="Payment Status" name="paymentStatus" value={form.paymentStatus} onChange={onChange} options={paymentStatusOptions.map((item) => ({ label: item, value: item }))} />
-        <Field label="Reservation Date" name="reservationDate" type="date" value={form.reservationDate} onChange={onChange} />
-        <Field label="Expiry Date" name="expiryDate" type="date" value={form.expiryDate} onChange={onChange} />
-        <Field label="Proposed Lease Start Date" name="proposedLeaseStartDate" type="date" value={form.proposedLeaseStartDate} onChange={onChange} />
-        <Field label="Proposed Lease End Date" name="proposedLeaseEndDate" type="date" value={form.proposedLeaseEndDate} onChange={onChange} />
+        </div>
+        <SelectField label="Reservation Status" name="reservationStatus" value={form.reservationStatus} onChange={onChange} options={reservationStatusOptions.map((item) => ({ label: item, value: item }))} required />
+        <SelectField label="Workflow Status" name="workflowStatus" value={form.workflowStatus} onChange={onChange} options={workflowStatusOptions.map((item) => ({ label: item, value: item }))} required />
+        <SelectField label="Payment Status" name="paymentStatus" value={form.paymentStatus} onChange={onChange} options={paymentStatusOptions.map((item) => ({ label: item, value: item }))} required />
         <Field label="Quoted Rent" name="quotedRent" type="number" value={form.quotedRent} onChange={onChange} />
         <Field label="Deposit Amount" name="depositAmount" type="number" value={form.depositAmount} onChange={onChange} />
-        <Field label="Currency" name="currency" value={form.currency} onChange={onChange} />
-        <Field label="Created By" name="createdBy" value={form.createdBy} onChange={onChange} />
+        <Field label="Created By" name="createdBy" value={form.createdBy} onChange={onChange} required />
         <Field label="Customer / Lead" name="leadName" value={form.leadName} onChange={onChange} />
         <label className="block text-sm text-ink md:col-span-2">
           <span className="mb-2 block font-medium">Notes</span>
@@ -978,7 +1136,134 @@ function ReservationFormModal({
           <button type="submit" className="rounded-2xl bg-accent px-5 py-3 text-sm font-medium text-white">Save Reservation</button>
         </div>
       </form>
+      {unitSelectorOpen ? (
+        <UnitSelectionModal
+          title="Add Reservation Units"
+          form={form}
+          availableUnits={availableUnits}
+          selectedUnits={selectedUnits}
+          towers={towerOptions}
+          onClose={() => onUnitSelectorOpen(false)}
+          onChange={onChange}
+          onSearch={onSearchUnits}
+          onAddUnit={onAddUnit}
+          onRemoveUnit={onRemoveUnit}
+        />
+      ) : null}
     </Modal>
+  );
+}
+
+function UnitSelectionModal({
+  title,
+  form,
+  availableUnits,
+  selectedUnits,
+  towers,
+  onClose,
+  onChange,
+  onSearch,
+  onAddUnit,
+  onRemoveUnit
+}: Readonly<{
+  title: string;
+  form: ReservationFormState;
+  availableUnits: AvailableUnitRecord[];
+  selectedUnits: SelectedAvailableUnit[];
+  towers: { label: string; value: string }[];
+  onClose: () => void;
+  onChange: React.Dispatch<React.SetStateAction<ReservationFormState>>;
+  onSearch: (filters?: Partial<UnitSearchFilters>) => void;
+  onAddUnit: (unit: AvailableUnitRecord) => void;
+  onRemoveUnit: (unit: Pick<AvailableUnitRecord, "unitId">) => void;
+}>) {
+  const [filters, setFilters] = useState<UnitSearchFilters>({
+    query: "",
+    propertyId: form.propertyId,
+    towerId: form.towerId,
+    startDate: form.proposedLeaseStartDate,
+    endDate: form.proposedLeaseEndDate,
+    floor: "",
+    unitType: "",
+    minArea: "",
+    maxArea: "",
+    minRent: "",
+    maxRent: ""
+  });
+  const selectedUnitIds = useMemo(() => new Set(selectedUnits.map((unit) => unit.unitId)), [selectedUnits]);
+  const visibleUnits = availableUnits
+    .filter((unit) => unit.availabilityStatus === "AVAILABLE")
+    .filter((unit) => String(unit.propertyId) === form.propertyId)
+    .filter((unit) => !filters.towerId || String(unit.towerId) === filters.towerId)
+    .slice(0, 20);
+
+  function runSearch(nextFilters = filters) {
+    onChange((current) => ({ ...current, towerId: nextFilters.towerId, unitId: "" }));
+    onSearch({ ...nextFilters, propertyId: form.propertyId });
+  }
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-slate-950/50 p-4">
+      <div className="max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-[28px] bg-white p-6 shadow-card">
+        <div className="flex flex-col gap-3 border-b border-slate-200 pb-5 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-xs uppercase tracking-[0.24em] text-steel">Unit Selection</p>
+            <h3 className="mt-2 text-xl font-semibold text-ink">{title}</h3>
+            <p className="mt-1 text-sm text-steel">Only available units for the selected property and period are shown.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-xl bg-cloud px-3 py-2 text-sm text-ink">Close</button>
+        </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <input value={filters.query} onChange={(event) => setFilters((current) => ({ ...current, query: event.target.value }))} placeholder="Search unit" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <select value={filters.towerId} onChange={(event) => setFilters((current) => ({ ...current, towerId: event.target.value }))} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+            <option value="">All available towers</option>
+            {towers.map((tower) => <option key={tower.value} value={tower.value}>{tower.label}</option>)}
+          </select>
+          <input value={filters.floor} onChange={(event) => setFilters((current) => ({ ...current, floor: event.target.value }))} placeholder="Floor" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <select value={filters.unitType} onChange={(event) => setFilters((current) => ({ ...current, unitType: event.target.value }))} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+            <option value="">All unit types</option>
+            {["OFFICE", "APARTMENT", "RETAIL"].map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+          <input value={filters.minArea} onChange={(event) => setFilters((current) => ({ ...current, minArea: event.target.value }))} placeholder="Min area" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <input value={filters.maxArea} onChange={(event) => setFilters((current) => ({ ...current, maxArea: event.target.value }))} placeholder="Max area" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <input value={filters.minRent} onChange={(event) => setFilters((current) => ({ ...current, minRent: event.target.value }))} placeholder="Min rent" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+          <input value={filters.maxRent} onChange={(event) => setFilters((current) => ({ ...current, maxRent: event.target.value }))} placeholder="Max rent" type="number" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+        </div>
+        <div className="mt-4 flex justify-end">
+          <button type="button" onClick={() => runSearch()} className="rounded-2xl bg-accent px-5 py-3 text-sm font-medium text-white">Search Available Units</button>
+        </div>
+        <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
+          <table className="min-w-[980px] text-left text-sm">
+            <thead className="bg-slate-50 text-steel">
+              <tr>{["Tower", "Floor", "Unit", "Type", "Area", "Monthly Benchmark Rent", "Deposit", "Charges", "Action"].map((label) => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr>
+            </thead>
+            <tbody>
+              {visibleUnits.length === 0 ? (
+                <tr><td colSpan={9} className="px-4 py-8 text-center text-sm text-steel">No available units matched the current filters.</td></tr>
+              ) : visibleUnits.map((unit) => (
+                <tr key={unit.unitId} className="border-t border-slate-100">
+                  <td className="px-4 py-3 text-ink">{unit.towerName}</td>
+                  <td className="px-4 py-3 text-steel">{unit.floor}</td>
+                  <td className="px-4 py-3 text-steel">{unit.unitNumber}</td>
+                  <td className="px-4 py-3 text-steel">{unit.unitType}</td>
+                  <td className="px-4 py-3 text-steel">{unit.area} {unit.areaUnit}</td>
+                  <td className="px-4 py-3 text-steel">{formatMoney(unitRent(unit, "MONTHLY"), form.currency)}</td>
+                  <td className="px-4 py-3 text-steel">{formatMoney(unit.securityDeposit, unit.currency)}</td>
+                  <td className="px-4 py-3 text-steel">{formatMoney(unitCharges(unit), unit.currency)}</td>
+                  <td className="px-4 py-3">
+                    {selectedUnitIds.has(unit.unitId) ? (
+                      <button type="button" onClick={() => onRemoveUnit(unit)} className="rounded-xl bg-rose-50 px-3 py-2 text-xs font-medium text-rose-700">Remove</button>
+                    ) : (
+                      <button type="button" onClick={() => onAddUnit(unit)} className="rounded-xl bg-accent px-3 py-2 text-xs font-medium text-white">Add Unit</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -991,11 +1276,11 @@ function WorkflowModal({ record, form, onClose, onSubmit, onChange }: Readonly<{
 }>) {
   return (
     <Modal title={`Workflow: ${record.reservationNumber}`} onClose={onClose}>
-      <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
-        <SelectField label="Reservation Status" name="reservationStatus" value={form.reservationStatus} onChange={onChange} options={reservationStatusOptions.map((item) => ({ label: item, value: item }))} />
-        <SelectField label="Workflow Status" name="workflowStatus" value={form.workflowStatus} onChange={onChange} options={workflowStatusOptions.map((item) => ({ label: item, value: item }))} />
-        <SelectField label="Payment Status" name="paymentStatus" value={form.paymentStatus} onChange={onChange} options={paymentStatusOptions.map((item) => ({ label: item, value: item }))} />
-        <Field label="Updated By" name="updatedBy" value={form.updatedBy} onChange={onChange} />
+      <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit} noValidate>
+        <SelectField label="Reservation Status" name="reservationStatus" value={form.reservationStatus} onChange={onChange} options={reservationStatusOptions.map((item) => ({ label: item, value: item }))} required />
+        <SelectField label="Workflow Status" name="workflowStatus" value={form.workflowStatus} onChange={onChange} options={workflowStatusOptions.map((item) => ({ label: item, value: item }))} required />
+        <SelectField label="Payment Status" name="paymentStatus" value={form.paymentStatus} onChange={onChange} options={paymentStatusOptions.map((item) => ({ label: item, value: item }))} required />
+        <Field label="Updated By" name="updatedBy" value={form.updatedBy} onChange={onChange} required />
         <label className="block text-sm text-ink md:col-span-2">
           <span className="mb-2 block font-medium">Approval Notes</span>
           <textarea value={form.notes} onChange={(event) => onChange((current) => ({ ...(current ?? form), notes: event.target.value }))} className="min-h-24 w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent" />
@@ -1018,12 +1303,12 @@ function ConvertModal({ record, form, onClose, onSubmit, onChange }: Readonly<{
 }>) {
   return (
     <Modal title={`Convert ${record.reservationNumber} to Lease`} onClose={onClose}>
-      <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit}>
-        <Field label="Lease Number" name="leaseNumber" value={form.leaseNumber} onChange={onChange} />
-        <SelectField label="Lease Type" name="leaseType" value={form.leaseType} onChange={onChange} options={leaseTypeOptions.map((item) => ({ label: item, value: item }))} />
-        <Field label="Start Date" name="startDate" type="date" value={form.startDate} onChange={onChange} />
-        <Field label="End Date" name="endDate" type="date" value={form.endDate} onChange={onChange} />
-        <Field label="Created By" name="createdBy" value={form.createdBy} onChange={onChange} />
+      <form className="grid gap-4 md:grid-cols-2" onSubmit={onSubmit} noValidate>
+        <Field label="Lease Number" name="leaseNumber" value={form.leaseNumber} onChange={onChange} required />
+        <SelectField label="Lease Type" name="leaseType" value={form.leaseType} onChange={onChange} options={leaseTypeOptions.map((item) => ({ label: item, value: item }))} required />
+        <Field label="Start Date" name="startDate" type="date" value={form.startDate} onChange={onChange} required />
+        <Field label="End Date" name="endDate" type="date" value={form.endDate} onChange={onChange} required />
+        <Field label="Created By" name="createdBy" value={form.createdBy} onChange={onChange} required />
         <label className="block text-sm text-ink md:col-span-2">
           <span className="mb-2 block font-medium">Lease Notes</span>
           <textarea value={form.notes} onChange={(event) => onChange((current) => ({ ...(current ?? form), notes: event.target.value }))} className="min-h-24 w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent" />
@@ -1054,32 +1339,34 @@ function Modal({ title, children, onClose }: Readonly<{ title: string; children:
   );
 }
 
-function Field({ label, name, value, onChange, type = "text" }: Readonly<{
+function Field({ label, name, value, onChange, type = "text", required = false }: Readonly<{
   label: string;
   name: string;
   value: string;
   onChange: React.Dispatch<React.SetStateAction<Record<string, string> | null>> | React.Dispatch<React.SetStateAction<Record<string, string>>>;
   type?: string;
+  required?: boolean;
 }>) {
   return (
     <label className="block text-sm text-ink">
-      <span className="mb-2 block font-medium">{label}</span>
-      <input type={type} value={value} onChange={(event) => onChange((current: Record<string, string> | null) => ({ ...(current ?? {}), [name]: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent" />
+      <span className="mb-2 block font-medium">{label}{required ? <span className="text-rose-600"> *</span> : null}</span>
+      <input required={required} type={type} value={value} onChange={(event) => onChange((current: Record<string, string> | null) => ({ ...(current ?? {}), [name]: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent" />
     </label>
   );
 }
 
-function SelectField({ label, name, value, options, onChange }: Readonly<{
+function SelectField({ label, name, value, options, onChange, required = false }: Readonly<{
   label: string;
   name: string;
   value: string;
   options: { label: string; value: string }[];
   onChange: React.Dispatch<React.SetStateAction<Record<string, string> | null>> | React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  required?: boolean;
 }>) {
   return (
     <label className="block text-sm text-ink">
-      <span className="mb-2 block font-medium">{label}</span>
-      <select value={value} onChange={(event) => onChange((current: Record<string, string> | null) => ({ ...(current ?? {}), [name]: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent">
+      <span className="mb-2 block font-medium">{label}{required ? <span className="text-rose-600"> *</span> : null}</span>
+      <select required={required} value={value} onChange={(event) => onChange((current: Record<string, string> | null) => ({ ...(current ?? {}), [name]: event.target.value }))} className="w-full rounded-2xl border border-slate-200 px-4 py-3 outline-none focus:border-accent">
         <option value="">Select</option>
         {options.map((option) => (
           <option key={option.value} value={option.value}>{option.label}</option>

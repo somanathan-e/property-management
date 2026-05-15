@@ -177,15 +177,17 @@ Profile | Lease History | Payments | Complaints | Documents
 ## 4.1 Reservation Management
 
 ```text
-Select Unit Mode
+Select Reservation Period
+↓
+Select Currency
 ↓
 Select Property
 ↓
-Select Tower
+Open Unit Selection Modal
 ↓
-Search and Add Unit(s)
+Search and Add Available Unit(s)
 ↓
-Reservation Form
+Review Selected Units Grid and Totals
 ↓
 Payment Details
 ↓
@@ -201,22 +203,59 @@ Reservation Confirmation
 
 ### New Reservation Unit Selection
 
-| Mode | Behavior |
-|---|---|
-| Single Unit | Default flow for one available unit |
-| Multiple Units | Manual search-and-add flow for multiple units in one transaction |
+New Reservation uses one unit-selection UI for both one-unit and multi-unit reservations.
 
-Multiple Units rules:
+Header-level rules:
 
-- Select Property first.
-- Load only available Towers for the selected Property and period.
-- Select Tower before searching for units.
-- Search units manually and add units one by one.
-- Do not display all available units in a large grid.
-- Show selected units in a compact grid with Unit Number, Floor, Area, Rent, Deposit, Charges, and Remove.
-- Show consolidated Total Area, Total Rent, Total Deposit, and Total Charges.
-- Prevent duplicate units and units that are inactive, unavailable, already reserved, or already leased during the selected period.
-- Multi-unit selection is allowed only within the same Property.
+- one Customer
+- one Property
+- one Currency
+- period must be selected before unit selection
+- one selected unit is treated as Single Unit
+- more than one selected unit is treated as Multi-Unit
+- multi-unit selection is allowed only within the selected Property
+- selected units may belong to the same Tower or different Towers under the selected Property
+
+Unit selection happens in a modal. The modal must:
+
+- search available units manually instead of showing every unit by default
+- show only units available for the selected Property, period, and availability status
+- support optional filters for Tower, Floor, Unit Type, Area, and Rent Range
+- allow users to add and remove units manually
+- prevent duplicates while adding
+- validate live availability while adding
+
+Selected Units Grid columns:
+
+- Tower
+- Unit
+- Area
+- Rent Frequency
+- Benchmark Rent
+- Negotiated Rent
+- Variance Amount
+- Variance %
+- Deposit
+- Charges
+- Action
+
+Consolidated Summary:
+
+- Total Units
+- Total Area
+- Total Benchmark Rent
+- Total Negotiated Rent
+- Total Variance Amount
+- Average Variance %
+- Total Deposit
+- Total Charges
+
+Variance calculation:
+
+```text
+Variance Amount = Negotiated Rent - Benchmark Rent
+Variance % = (Variance Amount / Benchmark Rent) * 100
+```
 
 ## 4.2 Lease Management Screen
 
@@ -246,23 +285,29 @@ Audit Logs
 
 ### New Lease Unit Selection
 
-New Lease must use the same unit-selection model as New Reservation:
+New Lease must use the same unit-selection model and visual behavior as New Reservation.
 
-| Mode | Behavior |
-|---|---|
-| Single Unit | Default flow for one available unit |
-| Multiple Units | Manual search-and-add flow for multiple units in one transaction |
+Header-level rules:
 
-The Multiple Units flow must:
+- one Customer
+- one Property
+- one Currency
+- lease period must be selected before unit selection
+- one selected unit is treated as Single Unit
+- more than one selected unit is treated as Multi-Unit
+- selected units must stay within the selected Property
+- selected units may belong to the same Tower or different Towers under the selected Property
+
+The unit-selection modal must:
 
 - filter Properties, Towers, and Units by lease period and availability
-- load Towers only after Property selection
-- load/search Units only after Tower selection
-- let users add and remove units manually
-- keep all selected units within one Property
-- show Unit Number, Floor, Area, Rent, Deposit, Charges, and Remove in the selected units grid
-- show consolidated Total Area, Total Rent, Total Deposit, and Total Charges
-- validate availability again while adding a unit
+- search units manually using optional Tower, Floor, Unit Type, Area, and Rent Range filters
+- show only available units
+- allow users to add and remove units manually
+- prevent duplicates
+- validate live availability before adding a unit
+
+The selected units grid and consolidated summary must match New Reservation, including per-unit Rent Frequency, Benchmark Rent, editable Negotiated Rent, Variance Amount, Variance %, Deposit, and Charges.
 
 ## 4.3 Sales Management
 

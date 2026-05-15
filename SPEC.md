@@ -277,25 +277,67 @@ Screens:
 Reservation workflow:
 
 ```text
-Select Unit Mode
+Select Period
+-> Select Currency
 -> Select Property
--> Select Tower
--> Search and Add Unit(s)
--> Reservation Form
+-> Open Unit Selection Modal
+-> Search and Add Available Unit(s)
+-> Review Selected Units Grid
 -> Payment Details
 -> Approval Workflow
 -> Reservation Confirmation
 ```
 
-Reservation unit modes:
+Reservation unit selection:
 
-- Single Unit is the default mode and follows the normal one-unit reservation flow.
-- Multiple Units allows one reservation transaction to include more than one unit.
-- Multi-unit reservations must be limited to units from the same property.
-- Multi-unit selection must not show all available units in a large selection grid.
-- Users must manually search and add units one by one to the selected units grid.
-- The selected units grid must show Unit Number, Floor, Area, Rent, Deposit, Charges, and an action to remove the unit.
-- The form must show consolidated Total Area, Total Rent, Total Deposit, and Total Charges.
+- New Reservation uses one shared UI for one or many units.
+- One selected unit is treated as Single Unit.
+- More than one selected unit is treated as Multi-Unit.
+- Customer, Property, and Currency are selected once at document/header level.
+- Multi-unit reservations must be limited to units from the selected Property.
+- Selected units may belong to the same Tower or different Towers under the selected Property.
+- Unit selection happens through a modal/popup.
+- The modal must search available units manually instead of displaying all available units by default.
+- The modal must support optional filters for Tower, Floor, Unit Type, Area, and Rent Range.
+- Available units must be filtered by selected Property, selected period, and unit availability status.
+- Users must manually add and remove units.
+- Duplicate, inactive, unavailable, already reserved, and already leased units must be rejected.
+- Rent Frequency is selected per unit.
+- Benchmark Rent is system-maintained per unit.
+- Negotiated Rent is editable per unit.
+- Variance Amount and Variance % are calculated automatically.
+
+Selected Units Grid:
+
+- Tower
+- Unit
+- Area
+- Rent Frequency
+- Benchmark Rent
+- Negotiated Rent
+- Variance Amount
+- Variance %
+- Deposit
+- Charges
+- Action
+
+Consolidated Summary:
+
+- Total Units
+- Total Area
+- Total Benchmark Rent
+- Total Negotiated Rent
+- Total Variance Amount
+- Average Variance %
+- Total Deposit
+- Total Charges
+
+Variance calculation:
+
+```text
+Variance Amount = Negotiated Rent - Benchmark Rent
+Variance % = (Variance Amount / Benchmark Rent) * 100
+```
 
 Lease header actions:
 
@@ -322,12 +364,20 @@ Lease workflow states:
 - Active
 - Expired
 
-Lease unit modes:
+Lease unit selection:
 
-- Single Unit is the default mode and follows the normal one-unit lease flow.
-- Multiple Units allows one lease transaction to include more than one unit.
-- Multi-unit leases must be limited to units from the same property.
-- The lease form must use the same property, tower, manual unit search, add/remove, selected-unit grid, and consolidated total behavior as reservations.
+- New Lease must use the same unit-selection UI and behavior as New Reservation.
+- Customer, Property, and Currency are selected once at document/header level.
+- One selected unit is treated as Single Unit.
+- More than one selected unit is treated as Multi-Unit.
+- Multi-unit leases must be limited to units from the selected Property.
+- Selected units may belong to the same Tower or different Towers under the selected Property.
+- Unit selection happens through a modal/popup with manual search and optional filters.
+- Rent Frequency is selected per unit.
+- Benchmark Rent is system-maintained per unit.
+- Negotiated Rent is editable per unit.
+- Variance Amount and Variance % are calculated automatically.
+- The lease form must use the same selected-unit grid and consolidated summary as reservations.
 - A unit must be revalidated for availability before it is added to the selected units grid.
 
 Sales Management sections:
@@ -343,14 +393,17 @@ Acceptance criteria:
 
 - reservations show unit details, customer summary, and reservation timeline
 - lease records can be created against customer and unit inventory
-- new reservations and leases support Single Unit and Multiple Units modes
-- Single Unit is the default for new reservation and lease transactions
-- multi-unit reservation and lease transactions are restricted to one property
+- new reservations and leases support one-unit and multi-unit transactions through the same unit-selection UI
+- one selected unit is Single Unit; multiple selected units are Multi-Unit
+- customer, property, and currency are document/header-level selections
+- multi-unit reservation and lease transactions are restricted to the selected property
+- selected units may span same-property towers
 - property, tower, and unit options are filtered by the selected transaction period and availability
 - tower options are loaded only after property selection
-- unit search is loaded only after tower selection and a manual unit search/add action
+- unit search is performed in a modal with optional Tower, Floor, Unit Type, Area, and Rent Range filters
 - duplicate, inactive, unavailable, already reserved, and already leased units are rejected
-- consolidated area, rent, deposit, and charge totals are visible for multi-unit transactions
+- per-unit Rent Frequency, Benchmark Rent, editable Negotiated Rent, Variance Amount, and Variance % are visible
+- consolidated totals include units, area, benchmark rent, negotiated rent, variance amount, average variance %, deposit, and charges
 - lease approval status is visible through a workflow sidebar
 - lease changes are auditable
 - active lease allocation must prevent conflicting occupancy assignment
@@ -533,6 +586,9 @@ Acceptance criteria:
 - approval-sensitive actions must capture actor, date/time, status, and remarks
 - tenant-aware design must be preserved in schema and service design
 - service endpoint adapters must not contain business logic
+- entry forms must indicate mandatory fields with a visible marker
+- entry forms must validate mandatory fields on the client before calling backend services
+- backend services must still validate all required fields before persistence
 
 ---
 
@@ -714,6 +770,9 @@ Exit criteria:
 
 - reservation workflow
 - lease workflow
+- shared modal-based unit selection for one-unit and multi-unit transactions
+- per-unit rent frequency, benchmark rent, negotiated rent, and variance calculations
+- document-level customer, property, and currency rules
 - lease approval states
 - lease documents and audit logs
 - sales management foundation
@@ -721,6 +780,8 @@ Exit criteria:
 Exit criteria:
 
 - reservation can progress through approval
+- reservation and lease creation can select one or more available same-property units from a modal
+- selected-unit summaries calculate total units, area, benchmark rent, negotiated rent, variance, deposits, and charges
 - lease can move from draft to active
 - lease changes are auditable
 - conflicting active unit allocation is prevented
@@ -785,6 +846,7 @@ Required testing:
 - authorization tests for governed actions
 - frontend tests or manual QA evidence for critical screens
 - UAT scenarios for end-to-end workflows
+- client-side required-field validation tests or QA evidence for entry forms
 
 Critical UAT scenarios:
 
@@ -793,7 +855,10 @@ Critical UAT scenarios:
 - unit creation and occupancy status update
 - customer/tenant onboarding
 - reservation creation and approval
+- reservation creation with one unit and with multiple same-property units
 - lease creation and activation
+- lease creation with one unit and with multiple same-property units
+- per-unit negotiated rent and variance calculation during reservation and lease creation
 - lease renewal/amendment/termination
 - invoice and collection follow-up
 - work order creation and closure
@@ -818,6 +883,8 @@ The first acceptable release must satisfy:
 - property, customer, commercial, financial, operations, governance, and enterprise service foundations are represented
 - workflow and approval actions are auditable
 - dashboard and smart table screens are usable and responsive
+- entry forms visibly indicate mandatory fields and block incomplete submissions before backend calls
+- reservation and lease unit selection enforces same-property, duplicate prevention, and availability validation
 - logging and audit behavior support troubleshooting
 
 ---

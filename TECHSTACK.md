@@ -55,6 +55,15 @@ Frontend dev server:     http://localhost:3000/property-management
 Backend local server:    http://localhost:8080/property-management/api/v1
 ```
 
+Current implemented application notes:
+
+- The frontend uses the Next.js base path `/property-management`.
+- The local backend adapter is Jakarta REST/Jersey over the same module service layer used for the CoreConnect target.
+- Reservation and Lease use MyBatis XML mappers and strict DTO binding.
+- UI-only commercial pricing fields such as per-unit rent frequency, benchmark rent, negotiated rent display, and variance calculations must not be sent as unknown backend DTO fields unless the backend DTO and schema are updated together.
+- With the current schema, negotiated per-unit rent is submitted through the existing `rent` field on reservation/lease unit payloads.
+- Entry forms should mark mandatory fields and perform client-side required-field checks before API calls; backend validation remains mandatory before persistence.
+
 ---
 
 # Core Technologies

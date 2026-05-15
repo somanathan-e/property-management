@@ -262,6 +262,65 @@ Enterprise Services
 - real-time dashboard widgets where backend support exists
 - minimal clicks with contextual actions
 - professional typography and consistent spacing
+- entry forms must visibly mark mandatory fields
+- entry forms must validate mandatory fields before calling backend services
+
+## 6.6 Commercial Unit Selection UI
+
+New Reservation and New Lease must use the same unit-selection model.
+
+Document/header rules:
+
+- one Customer
+- one Property
+- one Currency
+- selected period before unit search
+- one selected unit is Single Unit
+- multiple selected units are Multi-Unit
+- multi-unit selections must stay within the selected Property
+- units may be from the same Tower or different Towers under the selected Property
+
+Unit selection must happen through a popup/modal:
+
+- search available units manually
+- optional filters: Tower, Floor, Unit Type, Area, Rent Range
+- show only units available for the selected Property, period, and availability status
+- add/remove units manually
+- prevent duplicate units
+- validate live availability before adding
+
+Selected Units Grid:
+
+- Tower
+- Unit
+- Area
+- Rent Frequency
+- Benchmark Rent
+- Negotiated Rent
+- Variance Amount
+- Variance %
+- Deposit
+- Charges
+
+Consolidated Summary:
+
+- Total Units
+- Total Area
+- Total Benchmark Rent
+- Total Negotiated Rent
+- Total Variance Amount
+- Average Variance %
+- Total Deposit
+- Total Charges
+
+Rent and variance rules:
+
+```text
+Variance Amount = Negotiated Rent - Benchmark Rent
+Variance % = (Variance Amount / Benchmark Rent) * 100
+```
+
+The current backend schema persists negotiated unit rent in the existing `rent` column. Benchmark rent, rent frequency, and variance are UI-calculated values unless a future schema change explicitly adds dedicated persistence fields.
 
 ---
 
@@ -462,7 +521,7 @@ Screens:
 Core workflows:
 
 ```text
-Unit Mode -> Property -> Tower -> Search/Add Unit(s) -> Reservation -> Payment Details -> Approval Workflow -> Confirmation
+Period -> Currency -> Property -> Unit Selection Modal -> Search/Add Unit(s) -> Reservation -> Payment Details -> Approval Workflow -> Confirmation
 ```
 
 ```text
@@ -479,16 +538,17 @@ Lease screen actions:
 
 Reservation and lease unit-selection standards:
 
-- Single Unit is the default mode.
-- Multiple Units allows more than one unit in one transaction.
-- Multi-unit transactions are restricted to one Property.
+- Reservation and Lease use the same modal-based unit-selection UI.
+- Customer, Property, and Currency are document/header-level selections.
+- One selected unit is Single Unit; multiple selected units are Multi-Unit.
+- Multi-unit transactions are restricted to the selected Property.
+- Selected units may belong to the same Tower or different Towers under the selected Property.
 - Property, Tower, and Unit availability must be filtered by the selected reservation or lease period.
-- Towers must load only after Property selection.
-- Units must be manually searched and added one by one after Tower selection.
-- Do not show all available units in a large selection grid for multi-unit transactions.
-- Selected unit grids must include Unit Number, Floor, Area, Rent, Deposit, Charges, and Remove.
-- Forms must show consolidated Total Area, Total Rent, Total Deposit, and Total Charges.
-- Duplicate, inactive, unavailable, already reserved, and already leased units must be rejected.
+- Unit selection must happen through a modal with manual search and optional Tower, Floor, Unit Type, Area, and Rent Range filters.
+- Do not show all available units in a large default selection grid for transaction entry.
+- Selected unit grids must include Tower, Unit, Area, Rent Frequency, Benchmark Rent, Negotiated Rent, Variance Amount, Variance %, Deposit, Charges, and Remove.
+- Forms must show Total Units, Total Area, Total Benchmark Rent, Total Negotiated Rent, Total Variance Amount, Average Variance %, Total Deposit, and Total Charges.
+- Duplicate, inactive, unavailable, already reserved, and already leased units must be rejected before submission.
 
 Lease tabs:
 

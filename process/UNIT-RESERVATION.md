@@ -10,19 +10,19 @@
 # Unit Selection Functional Requirements
 
 ## Objective
-Support Single Unit and Multiple Units flows for both New Reservation and New Lease.
+Support one-unit and multi-unit transactions for both New Reservation and New Lease through the same unit-selection UI.
 
-Default mode:
+Core rules:
 
-- Single Unit
-
-Multiple Units mode:
-
-- select multiple units in one transaction
-- restrict selected units to the same Property
-- add units manually one by one
+- one Customer per document
+- one Property per document
+- one Currency per document
+- one selected unit is treated as Single Unit
+- multiple selected units are treated as Multi-Unit
+- multi-unit selections must remain within the selected Property
+- selected units may belong to the same Tower or different Towers under the selected Property
+- add units manually from a modal/popup
 - remove units manually from the selected units grid
-- show consolidated Total Area, Total Rent, Total Deposit, and Total Charges
 - prevent duplicate, inactive, unavailable, already reserved, and already leased units
 
 ---
@@ -32,10 +32,10 @@ Multiple Units mode:
 The flow for New Reservation and New Lease is:
 
 ```text
-Select Unit Mode
+Select Period
+-> Select Currency
 -> Select Property
--> Load available Towers
--> Select Tower
+-> Open Unit Selection Modal
 -> Search available Units
 -> Add Unit
 -> Selected Units Grid
@@ -45,58 +45,74 @@ Rules:
 
 - Property
   - list only Properties with available units for the selected reservation or lease period
-  - multi-unit selections cannot mix Properties
+  - selection is maintained at document/header level
+  - selected units cannot mix Properties
 - Tower
-  - load only after Property is selected
+  - load only available Towers for the selected Property and period
+  - Tower is an optional unit-search filter inside the modal
   - list only Towers with available units for the selected period
 - Unit
-  - load/search only after Tower is selected
+  - load/search from the modal after Period, Currency, and Property are selected
   - filter by selected period and unit availability status
   - validate availability again while adding
 
 ---
 
-# Multiple Units UI
+# Unit Selection Modal
 
-Do not display all available units in a large selection list or grid.
+Do not display all available units in a large default selection list or grid.
 
 Users must manually search and add units one by one into the selected units grid.
 
 ## Search/Add Area
 
-- Property selector
-- Tower selector
 - Unit search input
+- optional Tower filter
+- optional Floor filter
+- optional Unit Type filter
+- optional Area range filter
+- optional Rent Range filter
 - Add Unit action for each search match
 
 ## Selected Units Grid
 
 Columns:
 
-- Unit Number
-- Floor
+- Tower
+- Unit
 - Area
-- Rent
+- Rent Frequency
+- Benchmark Rent
+- Negotiated Rent
+- Variance Amount
+- Variance %
 - Deposit
 - Charges
 - Remove action
 
 ## Consolidated Totals
 
+- Total Units
 - Total Area
-- Total Rent
+- Total Benchmark Rent
+- Total Negotiated Rent
+- Total Variance Amount
+- Average Variance %
 - Total Deposit
 - Total Charges
 
----
+## Rent and Variance Rules
 
-# Single Unit UI
+- Rent Frequency is selected per unit.
+- Benchmark Rent is system-maintained from available unit pricing.
+- Negotiated Rent is editable in Reservation and Lease.
+- Header rent amount is the consolidated negotiated rent.
+- Current backend persistence stores negotiated rent in the existing per-unit `rent` field. Benchmark and variance values are UI-calculated until dedicated persistence fields are added.
 
-Single Unit remains the normal existing flow:
-
-- user selects one available unit
-- standard reservation or lease details are entered
-- transaction is created against a single primary unit
+```text
+Variance Amount = Negotiated Rent - Benchmark Rent
+Variance % = (Variance Amount / Benchmark Rent) * 100
+```
 
 ---
 
@@ -184,20 +200,19 @@ User searches using filters or follows the property/tower/unit manual add flow.
 System displays only available units.
 
 ## Step 3 — Select Unit
-User selects a single unit or adds one or more units manually in Multiple Units mode.
+User adds one or more units from the modal. One selected unit is Single Unit; multiple selected units are Multi-Unit.
 
 ## Step 4 — Reservation Form
 Reservation form should capture:
 
 - Customer / Lead
-- Unit Mode
 - Property
-- Tower
+- Currency
 - Reservation Date
 - Reservation Expiry Date
 - Proposed Lease Start Date
 - Proposed Lease End Date
-- Negotiated Rent
+- selected units grid with per-unit rent frequency and negotiated rent
 - Deposit
 - Remarks / Notes
 
@@ -211,6 +226,7 @@ Reservation form should capture:
 - Prevent double reservation for the same unit.
 - Prevent duplicate units in the same reservation transaction.
 - Prevent multi-property unit selection in a multi-unit reservation.
+- Validate mandatory reservation fields on the client before calling backend services.
 
 ---
 
@@ -221,6 +237,7 @@ Reservation form should capture:
 - Prevent duplicate units in the same lease transaction.
 - Prevent multi-property unit selection in a multi-unit lease.
 - Multi-unit lease totals must match the selected units grid.
+- Validate mandatory lease fields on the client before calling backend services.
 
 ---
 
