@@ -3,12 +3,15 @@ DROP TABLE IF EXISTS opportunity;
 DROP TABLE IF EXISTS lead;
 DROP TABLE IF EXISTS contact;
 DROP TABLE IF EXISTS amenity;
+DROP TABLE IF EXISTS reservation_status_history;
+DROP TABLE IF EXISTS reservation_unit;
 DROP TABLE IF EXISTS reservation;
-DROP TABLE IF EXISTS unit_master;
-DROP TABLE IF EXISTS tower;
+DROP TABLE IF EXISTS pm_lease_unit;
 DROP TABLE IF EXISTS asset;
 DROP TABLE IF EXISTS pm_lease_transaction;
 DROP TABLE IF EXISTS pm_lease;
+DROP TABLE IF EXISTS unit_master;
+DROP TABLE IF EXISTS tower;
 DROP TABLE IF EXISTS customer;
 DROP TABLE IF EXISTS property;
 DROP TABLE IF EXISTS tenant;
@@ -160,6 +163,29 @@ CREATE TABLE pm_lease (
     CONSTRAINT fk_pm_lease_customer FOREIGN KEY (customer_id) REFERENCES customer(id)
 );
 
+CREATE TABLE pm_lease_unit (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT,
+    lease_id BIGINT NOT NULL,
+    property_id BIGINT NOT NULL,
+    unit_id BIGINT NOT NULL,
+    unit_number VARCHAR(50) NOT NULL,
+    area DECIMAL(12,2) NOT NULL,
+    rent DECIMAL(12,2) NOT NULL,
+    additional_charges DECIMAL(12,2) NOT NULL DEFAULT 0,
+    deposit DECIMAL(12,2) NOT NULL,
+    tax DECIMAL(12,2) NOT NULL DEFAULT 0,
+    fit_out_period VARCHAR(80),
+    unit_lease_status VARCHAR(40) NOT NULL,
+    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    CONSTRAINT fk_pm_lease_unit_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(id),
+    CONSTRAINT fk_pm_lease_unit_lease FOREIGN KEY (lease_id) REFERENCES pm_lease(id),
+    CONSTRAINT fk_pm_lease_unit_property FOREIGN KEY (property_id) REFERENCES property(id),
+    CONSTRAINT fk_pm_lease_unit_unit FOREIGN KEY (unit_id) REFERENCES unit_master(id)
+);
+
 CREATE TABLE pm_lease_transaction (
     id BIGINT PRIMARY KEY AUTO_INCREMENT,
     tenant_id BIGINT,
@@ -197,12 +223,15 @@ CREATE TABLE reservation (
     payment_status VARCHAR(40) NOT NULL,
     reservation_date DATE NOT NULL,
     expiry_date DATE NOT NULL,
+    proposed_lease_start_date DATE NOT NULL,
+    proposed_lease_end_date DATE NOT NULL,
     quoted_rent DECIMAL(12,2) NOT NULL,
     currency VARCHAR(10) NOT NULL,
     deposit_amount DECIMAL(12,2) NOT NULL,
     created_by VARCHAR(80) NOT NULL,
     updated_by VARCHAR(80),
     converted_lease_id BIGINT,
+    lead_name VARCHAR(150),
     notes VARCHAR(1000),
     created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -213,6 +242,44 @@ CREATE TABLE reservation (
     CONSTRAINT fk_reservation_unit FOREIGN KEY (unit_id) REFERENCES unit_master(id),
     CONSTRAINT fk_reservation_customer FOREIGN KEY (customer_id) REFERENCES customer(id),
     CONSTRAINT fk_reservation_converted_lease FOREIGN KEY (converted_lease_id) REFERENCES pm_lease(id)
+);
+
+CREATE TABLE reservation_unit (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT,
+    reservation_id BIGINT NOT NULL,
+    property_id BIGINT NOT NULL,
+    tower_id BIGINT NOT NULL,
+    unit_id BIGINT NOT NULL,
+    unit_number VARCHAR(50) NOT NULL,
+    unit_type VARCHAR(50) NOT NULL,
+    area DECIMAL(12,2) NOT NULL,
+    rent DECIMAL(12,2) NOT NULL,
+    deposit DECIMAL(12,2) NOT NULL,
+    tax DECIMAL(12,2) NOT NULL DEFAULT 0,
+    reservation_status VARCHAR(40) NOT NULL,
+    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_deleted BOOLEAN DEFAULT FALSE,
+    CONSTRAINT fk_reservation_unit_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(id),
+    CONSTRAINT fk_reservation_unit_reservation FOREIGN KEY (reservation_id) REFERENCES reservation(id),
+    CONSTRAINT fk_reservation_unit_property FOREIGN KEY (property_id) REFERENCES property(id),
+    CONSTRAINT fk_reservation_unit_tower FOREIGN KEY (tower_id) REFERENCES tower(id),
+    CONSTRAINT fk_reservation_unit_unit FOREIGN KEY (unit_id) REFERENCES unit_master(id)
+);
+
+CREATE TABLE reservation_status_history (
+    id BIGINT PRIMARY KEY AUTO_INCREMENT,
+    tenant_id BIGINT,
+    reservation_id BIGINT NOT NULL,
+    previous_status VARCHAR(40),
+    new_status VARCHAR(40) NOT NULL,
+    action_type VARCHAR(60) NOT NULL,
+    remarks VARCHAR(1000),
+    created_by VARCHAR(80),
+    created_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_reservation_history_tenant FOREIGN KEY (tenant_id) REFERENCES tenant(id),
+    CONSTRAINT fk_reservation_history_reservation FOREIGN KEY (reservation_id) REFERENCES reservation(id)
 );
 
 CREATE TABLE asset (
@@ -286,9 +353,12 @@ CREATE INDEX idx_amenity_search ON amenity(amenity_name, category, status);
 CREATE INDEX idx_customer_search ON customer(customer_name, category, status);
 CREATE INDEX idx_contact_search ON contact(full_name, role_title, status);
 CREATE INDEX idx_pm_lease_search ON pm_lease(lease_number, lease_status, renewal_status);
+CREATE INDEX idx_pm_lease_unit ON pm_lease_unit(lease_id, unit_id, unit_lease_status);
 CREATE INDEX idx_pm_lease_transaction_search ON pm_lease_transaction(lease_id, transaction_type, transaction_status);
 CREATE INDEX idx_reservation_search ON reservation(reservation_number, reservation_status, workflow_status, payment_status);
 CREATE INDEX idx_reservation_unit_window ON reservation(unit_id, reservation_date, expiry_date, reservation_status);
+CREATE INDEX idx_reservation_unit ON reservation_unit(reservation_id, unit_id, reservation_status);
+CREATE INDEX idx_reservation_history ON reservation_status_history(reservation_id, action_type, created_date);
 CREATE INDEX idx_asset_search ON asset(asset_name, category, status);
 CREATE INDEX idx_lead_search ON lead(lead_name, source, status, stage);
 CREATE INDEX idx_opportunity_search ON opportunity(opportunity_name, pipeline_stage, status);
@@ -313,7 +383,9 @@ INSERT INTO unit_master (tenant_id, property_id, tower_id, unit_code, unit_name,
 (1, 2, 2, 'B-0811', 'Apartment B-0811', 'APARTMENT', 'RESERVED', 'ACTIVE'),
 (2, 3, 3, 'R-011', 'Retail Pod R-011', 'RETAIL', 'VACANT', 'ACTIVE'),
 (1, 1, 1, 'A-1401', 'Suite A-1401', 'OFFICE', 'VACANT', 'ACTIVE'),
-(2, 3, 3, 'R-018', 'Retail Pod R-018', 'RETAIL', 'VACANT', 'ACTIVE');
+(2, 3, 3, 'R-018', 'Retail Pod R-018', 'RETAIL', 'VACANT', 'ACTIVE'),
+(1, 1, 1, 'A-1502', 'Suite A-1502', 'OFFICE', 'VACANT', 'ACTIVE'),
+(1, 1, 1, 'A-1603', 'Suite A-1603', 'OFFICE', 'VACANT', 'ACTIVE');
 
 INSERT INTO amenity (tenant_id, property_id, amenity_code, amenity_name, category, status) VALUES
 (1, 1, 'AM-001', 'Executive Lounge', 'COMMON_AREA', 'ACTIVE'),
@@ -343,6 +415,16 @@ INSERT INTO pm_lease (
 (1, 'LS-2026-005', NULL, NULL, 1, 2, 2, 2, 2, 'RESIDENTIAL', 'TERMINATION_REVIEW', 'OCCUPIED', 'AED', 9400.00, 15000.00, 'NOT_DUE', 'TENANT', 'FINANCE_REVIEW', 'DRAFT', 'PENDING', 'NOT_REQUIRED', 'NOT_STARTED', 'IN_PROGRESS', DATE '2025-07-01', DATE '2026-06-30', NULL, NULL, NULL, NULL, 'collections.user', 'Tenant requested early termination.'),
 (2, 'LS-2026-006', NULL, NULL, 1, 3, 3, 3, 3, 'RETAIL', 'ACTIVE', 'VACANT', 'QAR', 13800.00, 22000.00, 'NOT_DUE', 'OWNER', 'LEGAL_REVIEW', 'DRAFT', 'PENDING', 'NOT_REQUIRED', 'NOT_STARTED', 'IN_PROGRESS', DATE '2025-09-01', DATE '2026-08-31', NULL, NULL, NULL, NULL, 'asset.manager', 'Owner initiated commercial review.');
 
+INSERT INTO pm_lease_unit (
+    tenant_id, lease_id, property_id, unit_id, unit_number, area, rent, additional_charges, deposit, tax, fit_out_period, unit_lease_status
+) VALUES
+(1, 1, 1, 1, 'A-1203', 1850.00, 18500.00, 875.00, 37000.00, 925.00, '2026-01-16 to 2026-02-15', 'ACTIVE'),
+(1, 2, 2, 2, 'B-0811', 1100.00, 9600.00, 725.00, 15000.00, 480.00, NULL, 'ACTIVE'),
+(2, 3, 3, 3, 'R-011', 920.00, 14200.00, 1025.00, 22000.00, 710.00, '2026-06-01 to 2026-06-30', 'ACTIVE'),
+(1, 4, 1, 1, 'A-1203', 1850.00, 19800.00, 875.00, 39000.00, 990.00, NULL, 'SUSPENDED'),
+(1, 5, 2, 2, 'B-0811', 1100.00, 9400.00, 725.00, 15000.00, 470.00, NULL, 'TERMINATION_REVIEW'),
+(2, 6, 3, 3, 'R-011', 920.00, 13800.00, 1025.00, 22000.00, 690.00, NULL, 'ACTIVE');
+
 INSERT INTO pm_lease_transaction (
     tenant_id, lease_id, transaction_number, transaction_type, previous_version_number, new_version_number, transaction_status,
     effective_start_date, effective_end_date, revised_rent_amount, revised_security_deposit, target_unit_id, reason, notes, created_by
@@ -355,11 +437,22 @@ INSERT INTO pm_lease_transaction (
 
 INSERT INTO reservation (
     tenant_id, reservation_number, property_id, tower_id, unit_id, customer_id, reservation_status, workflow_status,
-    payment_status, reservation_date, expiry_date, quoted_rent, currency, deposit_amount, created_by, updated_by,
-    converted_lease_id, notes
+    payment_status, reservation_date, expiry_date, proposed_lease_start_date, proposed_lease_end_date, quoted_rent,
+    currency, deposit_amount, created_by, updated_by, converted_lease_id, lead_name, notes
 ) VALUES
-(1, 'RSV-2026-001', 1, 1, 4, 1, 'PENDING_APPROVAL', 'SUBMITTED', 'PARTIAL', DATE '2026-07-01', DATE '2026-07-15', 17200.00, 'AED', 10000.00, 'leasing.user', 'leasing.user', NULL, 'Reservation awaiting portfolio approval.'),
-(2, 'RSV-2026-002', 3, 3, 5, 3, 'CONFIRMED', 'APPROVED', 'RECEIVED', DATE '2026-08-01', DATE '2026-08-20', 12800.00, 'QAR', 12000.00, 'leasing.user', 'leasing.manager', NULL, 'Confirmed retail reservation ready for lease conversion.');
+(1, 'RSV-2026-001', 1, 1, 4, 1, 'DRAFT', 'DRAFT', 'PARTIAL', DATE '2026-07-01', DATE '2026-07-15', DATE '2026-07-16', DATE '2027-07-15', 17200.00, 'AED', 10000.00, 'leasing.user', 'leasing.user', NULL, 'North Star Group', 'Draft reservation awaiting customer confirmation.'),
+(2, 'RSV-2026-002', 3, 3, 5, 3, 'RESERVED', 'APPROVED', 'RECEIVED', DATE '2026-08-01', DATE '2026-08-20', DATE '2026-08-21', DATE '2027-08-20', 12800.00, 'QAR', 12000.00, 'leasing.user', 'leasing.manager', NULL, 'Fresh Basket', 'Reserved retail unit ready for lease conversion.');
+
+INSERT INTO reservation_status_history (tenant_id, reservation_id, previous_status, new_status, action_type, remarks, created_by) VALUES
+(1, 1, NULL, 'DRAFT', 'CREATE', 'Draft reservation created.', 'leasing.user'),
+(2, 2, NULL, 'DRAFT', 'CREATE', 'Reservation created from unit search.', 'leasing.user'),
+(2, 2, 'DRAFT', 'RESERVED', 'WORKFLOW', 'Payment received and reservation approved.', 'leasing.manager');
+
+INSERT INTO reservation_unit (
+    tenant_id, reservation_id, property_id, tower_id, unit_id, unit_number, unit_type, area, rent, deposit, tax, reservation_status
+) VALUES
+(1, 1, 1, 1, 4, 'A-1401', 'OFFICE', 1850.00, 17200.00, 10000.00, 860.00, 'DRAFT'),
+(2, 2, 3, 3, 5, 'R-018', 'RETAIL', 920.00, 12800.00, 12000.00, 640.00, 'RESERVED');
 
 INSERT INTO asset (tenant_id, property_id, asset_code, asset_name, category, status) VALUES
 (1, 1, 'AS-001', 'Chiller Plant 01', 'HVAC', 'ACTIVE'),

@@ -4,6 +4,7 @@ import com.eba.lease.dto.LeaseDto;
 import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
 import com.eba.lease.dto.LeaseUpsertDto;
+import com.eba.lease.dto.LeaseUnitDto;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 
@@ -18,7 +19,17 @@ public interface LeaseMapper {
 
     long countActiveLeaseConflict(@Param("unitId") Long unitId, @Param("startDate") String startDate, @Param("endDate") String endDate, @Param("excludeId") Long excludeId);
 
+    long countActiveReservationConflict(@Param("unitId") Long unitId, @Param("startDate") String startDate, @Param("endDate") String endDate);
+
+    long countUnavailableUnit(@Param("unitId") Long unitId);
+
     void insert(LeaseUpsertDto request);
+
+    void insertLeaseUnit(@Param("leaseId") Long leaseId, @Param("propertyId") Long propertyId, @Param("unitId") Long unitId, @Param("unitNumber") String unitNumber, @Param("area") double area, @Param("rent") double rent, @Param("additionalCharges") double additionalCharges, @Param("deposit") double deposit, @Param("tax") double tax, @Param("fitOutPeriod") String fitOutPeriod, @Param("unitLeaseStatus") String unitLeaseStatus);
+
+    void deleteLeaseUnits(Long leaseId);
+
+    List<LeaseUnitDto> findLeaseUnits(Long leaseId);
 
     int update(@Param("id") Long id, @Param("request") LeaseUpsertDto request);
 

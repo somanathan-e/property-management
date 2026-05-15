@@ -8,12 +8,15 @@ import com.eba.lease.dto.LeaseDto;
 import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
 import com.eba.lease.dto.LeaseUpsertDto;
+import com.eba.lease.dto.LeaseUnitUpsertDto;
 import com.eba.lease.mappers.LeaseMapper;
 import com.eba.lease.service.LeaseService;
 import jakarta.ws.rs.core.Response;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.apache.ibatis.session.SqlSession;
 
 public class LeaseServiceImpl implements LeaseService {
@@ -52,7 +55,9 @@ public class LeaseServiceImpl implements LeaseService {
             LeaseMapper mapper = session.getMapper(LeaseMapper.class);
             ensureNoActiveLeaseConflict(mapper, request, null);
             mapper.insert(request);
-            return mapper.findByLeaseNumber(request.leaseNumber());
+            LeaseDto lease = mapper.findByLeaseNumber(request.leaseNumber());
+            insertLeaseUnits(mapper, lease.id(), normalizedUnits(request));
+            return mapper.findById(lease.id());
         }
     }
 
@@ -65,6 +70,8 @@ public class LeaseServiceImpl implements LeaseService {
             if (mapper.update(id, request) == 0) {
                 throw new AppException(Response.Status.NOT_FOUND, "Lease not found");
             }
+            mapper.deleteLeaseUnits(id);
+            insertLeaseUnits(mapper, id, normalizedUnits(request));
             return mapper.findById(id);
         }
     }
@@ -177,8 +184,44 @@ public class LeaseServiceImpl implements LeaseService {
     }
 
     private void ensureNoActiveLeaseConflict(LeaseMapper mapper, LeaseUpsertDto request, Long excludeId) {
-        if ("ACTIVE".equals(normalize(request.leaseStatus())) && mapper.countActiveLeaseConflict(request.unitId(), request.startDate(), request.endDate(), excludeId) > 0) {
-            throw new AppException(Response.Status.CONFLICT, "Unit already has an active lease for the requested lease term");
+        Set<Long> selectedUnitIds = new HashSet<>();
+        for (LeaseUnitUpsertDto unit : normalizedUnits(request)) {
+            if (unit.unitId() == null || !selectedUnitIds.add(unit.unitId())) {
+                throw new AppException(Response.Status.CONFLICT, "Duplicate units are not allowed in the same lease");
+            }
+            if (excludeId == null && mapper.countUnavailableUnit(unit.unitId()) > 0) {
+                throw new AppException(Response.Status.CONFLICT, "Inactive, occupied, or reserved units cannot be leased");
+            }
+            if (mapper.countActiveReservationConflict(unit.unitId(), request.startDate(), request.endDate()) > 0) {
+                throw new AppException(Response.Status.CONFLICT, "Unit already has an active reservation for the requested lease term");
+            }
+            if (mapper.countActiveLeaseConflict(unit.unitId(), request.startDate(), request.endDate(), excludeId) > 0) {
+                throw new AppException(Response.Status.CONFLICT, "Unit already has an active lease for the requested lease term");
+            }
+        }
+    }
+
+    private List<LeaseUnitUpsertDto> normalizedUnits(LeaseUpsertDto request) {
+        if (request.units() != null && !request.units().isEmpty()) {
+            return request.units();
+        }
+        return List.of(new LeaseUnitUpsertDto(
+            request.propertyId(),
+            request.unitId(),
+            "UNIT-" + request.unitId(),
+            0,
+            request.rentAmount(),
+            0,
+            request.securityDeposit(),
+            0,
+            null,
+            request.leaseStatus()
+        ));
+    }
+
+    private void insertLeaseUnits(LeaseMapper mapper, Long leaseId, List<LeaseUnitUpsertDto> units) {
+        for (LeaseUnitUpsertDto unit : units) {
+            mapper.insertLeaseUnit(leaseId, unit.propertyId(), unit.unitId(), unit.unitNumber(), unit.area(), unit.rent(), unit.additionalCharges(), unit.deposit(), unit.tax(), unit.fitOutPeriod(), unit.unitLeaseStatus());
         }
     }
 

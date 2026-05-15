@@ -6,7 +6,10 @@ import com.eba.common.config.ServiceRegistry;
 import com.eba.lease.dto.LeaseDto;
 import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
+import com.eba.lease.dto.LeaseUnitDto;
 import com.eba.lease.dto.LeaseUpsertDto;
+import com.eba.common.config.DatabaseConfig;
+import com.eba.lease.mappers.LeaseMapper;
 import com.eba.lease.service.LeaseService;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -19,6 +22,7 @@ import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import java.util.List;
+import org.apache.ibatis.session.SqlSession;
 
 @Path("/leases")
 @Produces(MediaType.APPLICATION_JSON)
@@ -73,6 +77,14 @@ public class LeaseController {
     @Path("/{id}/transactions")
     public ApiResponse<List<LeaseTransactionDto>> getLeaseTransactions(@PathParam("id") Long id) {
         return ApiResponse.success("Lease transactions fetched", leaseService.getLeaseTransactions(id));
+    }
+
+    @GET
+    @Path("/{id}/units")
+    public ApiResponse<List<LeaseUnitDto>> getLeaseUnits(@PathParam("id") Long id) {
+        try (SqlSession session = DatabaseConfig.sqlSessionFactory().openSession()) {
+            return ApiResponse.success("Lease units fetched", session.getMapper(LeaseMapper.class).findLeaseUnits(id));
+        }
     }
 
     @POST

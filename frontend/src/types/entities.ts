@@ -32,6 +32,11 @@ export type LeaseRecord = {
   rentAmount: number;
   currency: string;
   securityDeposit: number;
+  totalLeaseUnits: number;
+  totalLeaseArea: number;
+  totalRent: number;
+  totalDeposit: number;
+  totalCharges: number;
   renewalStatus: string;
   parentLeaseId: number | null;
   parentLeaseReference: string | null;
@@ -96,6 +101,12 @@ export type ReservationRecord = {
   paymentStatus: string;
   reservationDate: string;
   expiryDate: string;
+  proposedLeaseStartDate: string;
+  proposedLeaseEndDate: string;
+  totalReservedUnits: number;
+  totalReservedArea: number;
+  totalRentAmount: number;
+  totalDepositAmount: number;
   quotedRent: number;
   currency: string;
   depositAmount: number;
@@ -103,7 +114,83 @@ export type ReservationRecord = {
   createdDate: string;
   convertedLeaseId: number | null;
   convertedLeaseNumber: string | null;
+  leadName: string | null;
   notes: string | null;
+};
+
+export type ReservationUnitRecord = {
+  id: number;
+  reservationId: number;
+  propertyId: number;
+  propertyName: string;
+  towerId: number;
+  towerName: string;
+  unitId: number;
+  unitNumber: string;
+  unitType: string;
+  area: number;
+  rent: number;
+  deposit: number;
+  tax: number;
+  reservationStatus: string;
+};
+
+export type LeaseUnitRecord = {
+  id: number;
+  leaseId: number;
+  propertyId: number;
+  propertyName: string;
+  unitId: number;
+  unitNumber: string;
+  area: number;
+  rent: number;
+  additionalCharges: number;
+  deposit: number;
+  tax: number;
+  fitOutPeriod: string | null;
+  unitLeaseStatus: string;
+};
+
+export type AvailableUnitRecord = {
+  unitId: number;
+  propertyId: number;
+  towerId: number;
+  propertyName: string;
+  towerName: string;
+  location: string;
+  propertyType: string;
+  unitNumber: string;
+  floor: string;
+  unitType: string;
+  area: number;
+  areaUnit: string;
+  availabilityStatus: string;
+  availableFromDate: string;
+  monthlyRent: number;
+  currency: string;
+  securityDeposit: number;
+  maintenanceCharges: number;
+  camCharges: number;
+  parkingCharges: number;
+  minimumLeaseDuration: string;
+  fitOutPeriod: string;
+  noticePeriod: string;
+  escalationTerms: string;
+  furnishingStatus: string;
+  amenities: string;
+  parkingAvailability: string;
+  imageUrl: string;
+};
+
+export type ReservationHistoryRecord = {
+  id: number;
+  reservationId: number;
+  previousStatus: string | null;
+  newStatus: string;
+  actionType: string;
+  remarks: string | null;
+  createdBy: string | null;
+  createdDate: string;
 };
 
 export type AssetRecord = {

@@ -17,6 +17,12 @@ public record ReservationDto(
     String paymentStatus,
     String reservationDate,
     String expiryDate,
+    String proposedLeaseStartDate,
+    String proposedLeaseEndDate,
+    int totalReservedUnits,
+    double totalReservedArea,
+    double totalRentAmount,
+    double totalDepositAmount,
     double quotedRent,
     String currency,
     double depositAmount,
@@ -24,6 +30,7 @@ public record ReservationDto(
     String createdDate,
     Long convertedLeaseId,
     String convertedLeaseNumber,
+    String leadName,
     String notes
 ) {
 }

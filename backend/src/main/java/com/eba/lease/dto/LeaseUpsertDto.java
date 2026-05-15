@@ -1,5 +1,7 @@
 package com.eba.lease.dto;
 
+import java.util.List;
+
 public record LeaseUpsertDto(
     String leaseNumber,
     Long propertyId,
@@ -27,6 +29,7 @@ public record LeaseUpsertDto(
     String fitOutPeriodStart,
     String fitOutPeriodEnd,
     String createdBy,
-    String notes
+    String notes,
+    List<LeaseUnitUpsertDto> units
 ) {
 }

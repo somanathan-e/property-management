@@ -20,6 +20,12 @@
         r.payment_status,
         CAST(r.reservation_date AS VARCHAR) AS reservation_date,
         CAST(r.expiry_date AS VARCHAR) AS expiry_date,
+        CAST(r.proposed_lease_start_date AS VARCHAR) AS proposed_lease_start_date,
+        CAST(r.proposed_lease_end_date AS VARCHAR) AS proposed_lease_end_date,
+        COALESCE(ru.total_reserved_units, 0) AS total_reserved_units,
+        COALESCE(ru.total_reserved_area, 0) AS total_reserved_area,
+        COALESCE(ru.total_rent_amount, r.quoted_rent) AS total_rent_amount,
+        COALESCE(ru.total_deposit_amount, r.deposit_amount) AS total_deposit_amount,
         r.quoted_rent,
         r.currency,
         r.deposit_amount,
@@ -27,8 +33,164 @@
         CAST(r.created_date AS VARCHAR) AS created_date,
         r.converted_lease_id,
         l.lease_number AS converted_lease_number,
+        r.lead_name,
         r.notes
     </sql>
+
+    <sql id="unitAreaExpr">
+        CASE
+            WHEN u.unit_type = 'OFFICE' THEN 1850
+            WHEN u.unit_type = 'RETAIL' THEN 920
+            ELSE 1100
+        END
+    </sql>
+
+    <sql id="unitRentExpr">
+        CASE
+            WHEN u.unit_type = 'OFFICE' THEN 17200
+            WHEN u.unit_type = 'RETAIL' THEN 12800
+            ELSE 9400
+        END
+    </sql>
+
+    <select id="searchAvailableUnits" resultType="com.eba.reservation.dto.AvailableUnitDto">
+        SELECT
+            u.id AS unit_id,
+            p.id AS property_id,
+            tw.id AS tower_id,
+            p.property_name,
+            tw.tower_name,
+            p.city AS location,
+            p.property_type,
+            u.unit_code AS unit_number,
+            CASE
+                WHEN LOCATE('-', u.unit_code) &gt; 0 THEN SUBSTRING(u.unit_code, LOCATE('-', u.unit_code) + 1, 2)
+                ELSE '01'
+            END AS floor,
+            u.unit_type,
+            <include refid="unitAreaExpr" /> AS area,
+            'Sq.ft' AS area_unit,
+            'AVAILABLE' AS availability_status,
+            #{startDate} AS available_from_date,
+            <include refid="unitRentExpr" /> AS monthly_rent,
+            CASE WHEN p.city = 'Doha' THEN 'QAR' ELSE 'AED' END AS currency,
+            (<include refid="unitRentExpr" /> * 2) AS security_deposit,
+            450 AS maintenance_charges,
+            275 AS cam_charges,
+            CASE WHEN u.unit_type = 'RETAIL' THEN 300 ELSE 150 END AS parking_charges,
+            CASE WHEN u.unit_type = 'RETAIL' THEN '12 months' ELSE '6 months' END AS minimum_lease_duration,
+            CASE WHEN u.unit_type = 'RETAIL' THEN '30 days' ELSE '15 days' END AS fit_out_period,
+            '60 days' AS notice_period,
+            '5% annual escalation after first term' AS escalation_terms,
+            CASE WHEN u.unit_type = 'APARTMENT' THEN 'FURNISHED' ELSE 'NON_FURNISHED' END AS furnishing_status,
+            'Lobby, security, maintenance desk' AS amenities,
+            'Available' AS parking_availability,
+            '' AS image_url
+        FROM unit_master u
+        INNER JOIN property p ON p.id = u.property_id
+        INNER JOIN tower tw ON tw.id = u.tower_id
+        WHERE u.is_deleted = FALSE
+          AND u.status = 'ACTIVE'
+          AND u.occupancy_status = 'VACANT'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM reservation_unit ru
+              INNER JOIN reservation r ON r.id = ru.reservation_id
+              WHERE ru.unit_id = u.id
+                AND ru.is_deleted = FALSE
+                AND r.is_deleted = FALSE
+                AND ru.reservation_status IN ('DRAFT', 'RESERVED')
+                AND r.reservation_status IN ('DRAFT', 'RESERVED')
+                AND r.reservation_date &lt;= #{endDate}
+                AND r.expiry_date &gt;= #{startDate}
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM pm_lease l
+              WHERE l.is_deleted = FALSE
+                AND l.lease_status = 'ACTIVE'
+                AND l.start_date &lt;= #{endDate}
+                AND l.end_date &gt;= #{startDate}
+                AND (
+                    l.unit_id = u.id
+                    OR EXISTS (
+                        SELECT 1
+                        FROM pm_lease_unit lu
+                        WHERE lu.lease_id = l.id
+                          AND lu.unit_id = u.id
+                          AND lu.is_deleted = FALSE
+                    )
+                )
+          )
+        <if test="propertyId != null">AND p.id = #{propertyId}</if>
+        <if test="towerId != null">AND tw.id = #{towerId}</if>
+        <if test="propertyType != null and propertyType != ''">AND p.property_type = #{propertyType}</if>
+        <if test="unitType != null and unitType != ''">AND u.unit_type = #{unitType}</if>
+        <if test="unitSearch != null and unitSearch != ''">
+            AND (LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{unitSearch}), '%') OR LOWER(u.unit_name) LIKE CONCAT('%', LOWER(#{unitSearch}), '%'))
+        </if>
+        <if test="location != null and location != ''">AND LOWER(p.city) LIKE CONCAT('%', LOWER(#{location}), '%')</if>
+        <if test="minArea != null">AND <include refid="unitAreaExpr" /> &gt;= #{minArea}</if>
+        <if test="maxArea != null">AND <include refid="unitAreaExpr" /> &lt;= #{maxArea}</if>
+        <if test="minRent != null">AND <include refid="unitRentExpr" /> &gt;= #{minRent}</if>
+        <if test="maxRent != null">AND <include refid="unitRentExpr" /> &lt;= #{maxRent}</if>
+        <if test="leaseType != null and leaseType != ''">AND (u.unit_type = #{leaseType} OR p.property_type = #{leaseType})</if>
+        <if test="furnishingStatus != null and furnishingStatus != ''">
+            AND CASE WHEN u.unit_type = 'APARTMENT' THEN 'FURNISHED' ELSE 'NON_FURNISHED' END = #{furnishingStatus}
+        </if>
+        <if test="floor != null and floor != ''">
+            AND CASE WHEN LOCATE('-', u.unit_code) &gt; 0 THEN SUBSTRING(u.unit_code, LOCATE('-', u.unit_code) + 1, 2) ELSE '01' END = #{floor}
+        </if>
+        <if test="capacity != null">AND CASE WHEN u.unit_type = 'OFFICE' THEN 18 WHEN u.unit_type = 'RETAIL' THEN 8 ELSE 4 END &gt;= #{capacity}</if>
+        ORDER BY p.property_name, u.unit_code
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countAvailableUnits" resultType="long">
+        SELECT COUNT(*)
+        FROM unit_master u
+        INNER JOIN property p ON p.id = u.property_id
+        INNER JOIN tower tw ON tw.id = u.tower_id
+        WHERE u.is_deleted = FALSE
+          AND u.status = 'ACTIVE'
+          AND u.occupancy_status = 'VACANT'
+          AND NOT EXISTS (
+              SELECT 1 FROM reservation_unit ru
+              INNER JOIN reservation r ON r.id = ru.reservation_id
+              WHERE ru.unit_id = u.id AND ru.is_deleted = FALSE AND r.is_deleted = FALSE
+                AND ru.reservation_status IN ('DRAFT', 'RESERVED') AND r.reservation_status IN ('DRAFT', 'RESERVED')
+                AND r.reservation_date &lt;= #{endDate} AND r.expiry_date &gt;= #{startDate}
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM pm_lease l
+              WHERE l.is_deleted = FALSE AND l.lease_status = 'ACTIVE'
+                AND l.start_date &lt;= #{endDate} AND l.end_date &gt;= #{startDate}
+                AND (l.unit_id = u.id OR EXISTS (
+                    SELECT 1 FROM pm_lease_unit lu
+                    WHERE lu.lease_id = l.id AND lu.unit_id = u.id AND lu.is_deleted = FALSE
+                ))
+          )
+        <if test="propertyId != null">AND p.id = #{propertyId}</if>
+        <if test="towerId != null">AND tw.id = #{towerId}</if>
+        <if test="propertyType != null and propertyType != ''">AND p.property_type = #{propertyType}</if>
+        <if test="unitType != null and unitType != ''">AND u.unit_type = #{unitType}</if>
+        <if test="unitSearch != null and unitSearch != ''">
+            AND (LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{unitSearch}), '%') OR LOWER(u.unit_name) LIKE CONCAT('%', LOWER(#{unitSearch}), '%'))
+        </if>
+        <if test="location != null and location != ''">AND LOWER(p.city) LIKE CONCAT('%', LOWER(#{location}), '%')</if>
+        <if test="minArea != null">AND <include refid="unitAreaExpr" /> &gt;= #{minArea}</if>
+        <if test="maxArea != null">AND <include refid="unitAreaExpr" /> &lt;= #{maxArea}</if>
+        <if test="minRent != null">AND <include refid="unitRentExpr" /> &gt;= #{minRent}</if>
+        <if test="maxRent != null">AND <include refid="unitRentExpr" /> &lt;= #{maxRent}</if>
+        <if test="leaseType != null and leaseType != ''">AND (u.unit_type = #{leaseType} OR p.property_type = #{leaseType})</if>
+        <if test="furnishingStatus != null and furnishingStatus != ''">
+            AND CASE WHEN u.unit_type = 'APARTMENT' THEN 'FURNISHED' ELSE 'NON_FURNISHED' END = #{furnishingStatus}
+        </if>
+        <if test="floor != null and floor != ''">
+            AND CASE WHEN LOCATE('-', u.unit_code) &gt; 0 THEN SUBSTRING(u.unit_code, LOCATE('-', u.unit_code) + 1, 2) ELSE '01' END = #{floor}
+        </if>
+        <if test="capacity != null">AND CASE WHEN u.unit_type = 'OFFICE' THEN 18 WHEN u.unit_type = 'RETAIL' THEN 8 ELSE 4 END &gt;= #{capacity}</if>
+    </select>
 
     <select id="findPage" resultType="com.eba.reservation.dto.ReservationDto">
         SELECT <include refid="reservationColumns" />
@@ -38,6 +200,16 @@
         INNER JOIN unit_master u ON u.id = r.unit_id
         INNER JOIN customer c ON c.id = r.customer_id
         LEFT JOIN pm_lease l ON l.id = r.converted_lease_id
+        LEFT JOIN (
+            SELECT reservation_id,
+                   COUNT(*) AS total_reserved_units,
+                   SUM(area) AS total_reserved_area,
+                   SUM(rent) AS total_rent_amount,
+                   SUM(deposit) AS total_deposit_amount
+            FROM reservation_unit
+            WHERE is_deleted = FALSE
+            GROUP BY reservation_id
+        ) ru ON ru.reservation_id = r.id
         WHERE r.is_deleted = FALSE
         <if test="search != null and search != ''">
             AND (
@@ -88,6 +260,16 @@
         INNER JOIN unit_master u ON u.id = r.unit_id
         INNER JOIN customer c ON c.id = r.customer_id
         LEFT JOIN pm_lease l ON l.id = r.converted_lease_id
+        LEFT JOIN (
+            SELECT reservation_id,
+                   COUNT(*) AS total_reserved_units,
+                   SUM(area) AS total_reserved_area,
+                   SUM(rent) AS total_rent_amount,
+                   SUM(deposit) AS total_deposit_amount
+            FROM reservation_unit
+            WHERE is_deleted = FALSE
+            GROUP BY reservation_id
+        ) ru ON ru.reservation_id = r.id
         WHERE r.id = #{id} AND r.is_deleted = FALSE
     </select>
 
@@ -99,19 +281,65 @@
         INNER JOIN unit_master u ON u.id = r.unit_id
         INNER JOIN customer c ON c.id = r.customer_id
         LEFT JOIN pm_lease l ON l.id = r.converted_lease_id
+        LEFT JOIN (
+            SELECT reservation_id,
+                   COUNT(*) AS total_reserved_units,
+                   SUM(area) AS total_reserved_area,
+                   SUM(rent) AS total_rent_amount,
+                   SUM(deposit) AS total_deposit_amount
+            FROM reservation_unit
+            WHERE is_deleted = FALSE
+            GROUP BY reservation_id
+        ) ru ON ru.reservation_id = r.id
         WHERE r.reservation_number = #{reservationNumber} AND r.is_deleted = FALSE
     </select>
+
+    <select id="findUnits" parameterType="long" resultType="com.eba.reservation.dto.ReservationUnitDto">
+        SELECT ru.id,
+               ru.reservation_id,
+               ru.property_id,
+               p.property_name,
+               ru.tower_id,
+               tw.tower_name,
+               ru.unit_id,
+               ru.unit_number,
+               ru.unit_type,
+               ru.area,
+               ru.rent,
+               ru.deposit,
+               ru.tax,
+               ru.reservation_status
+        FROM reservation_unit ru
+        INNER JOIN property p ON p.id = ru.property_id
+        INNER JOIN tower tw ON tw.id = ru.tower_id
+        WHERE ru.reservation_id = #{reservationId}
+          AND ru.is_deleted = FALSE
+        ORDER BY ru.id
+    </select>
+
+    <delete id="deleteUnits" parameterType="long">
+        DELETE FROM reservation_unit WHERE reservation_id = #{reservationId}
+    </delete>
+
+    <insert id="insertUnit">
+        INSERT INTO reservation_unit (
+            tenant_id, reservation_id, property_id, tower_id, unit_id, unit_number, unit_type, area, rent, deposit, tax, reservation_status
+        )
+        VALUES (
+            1, #{reservationId}, #{unit.propertyId}, #{unit.towerId}, #{unit.unitId}, #{unit.unitNumber}, #{unit.unitType}, #{unit.area}, #{unit.rent}, #{unit.deposit}, #{unit.tax}, #{unit.reservationStatus}
+        )
+    </insert>
 
     <insert id="insert" parameterType="com.eba.reservation.dto.ReservationUpsertDto">
         INSERT INTO reservation (
             tenant_id, reservation_number, property_id, tower_id, unit_id, customer_id, reservation_status,
-            workflow_status, payment_status, reservation_date, expiry_date, quoted_rent, currency,
-            deposit_amount, created_by, notes
+            workflow_status, payment_status, reservation_date, expiry_date, proposed_lease_start_date, proposed_lease_end_date,
+            quoted_rent, currency, deposit_amount, created_by, lead_name, notes
         )
         VALUES (
             1, #{reservationNumber}, #{propertyId}, #{towerId}, #{unitId}, #{customerId}, #{reservationStatus},
-            #{workflowStatus}, #{paymentStatus}, #{reservationDate}, #{expiryDate}, #{quotedRent}, #{currency},
-            #{depositAmount}, #{createdBy}, #{notes}
+            #{workflowStatus}, #{paymentStatus}, #{reservationDate}, #{expiryDate}, #{proposedLeaseStartDate}, #{proposedLeaseEndDate},
+            #{quotedRent}, #{currency}, #{depositAmount}, #{createdBy}, #{leadName}, #{notes}
         )
     </insert>
 
@@ -127,10 +355,13 @@
             payment_status = #{request.paymentStatus},
             reservation_date = #{request.reservationDate},
             expiry_date = #{request.expiryDate},
+            proposed_lease_start_date = #{request.proposedLeaseStartDate},
+            proposed_lease_end_date = #{request.proposedLeaseEndDate},
             quoted_rent = #{request.quotedRent},
             currency = #{request.currency},
             deposit_amount = #{request.depositAmount},
             created_by = #{request.createdBy},
+            lead_name = #{request.leadName},
             notes = #{request.notes},
             updated_date = CURRENT_TIMESTAMP
         WHERE id = #{id} AND is_deleted = FALSE
@@ -149,12 +380,45 @@
 
     <update id="markConverted">
         UPDATE reservation
-        SET reservation_status = 'CONVERTED',
+        SET reservation_status = 'CONVERTED_TO_LEASE',
             workflow_status = 'APPROVED',
             converted_lease_id = #{leaseId},
             updated_date = CURRENT_TIMESTAMP
         WHERE id = #{id} AND is_deleted = FALSE
     </update>
+
+    <update id="expireOverdue">
+        UPDATE reservation
+        SET reservation_status = 'EXPIRED',
+            workflow_status = 'EXPIRED',
+            updated_date = CURRENT_TIMESTAMP
+        WHERE is_deleted = FALSE
+          AND reservation_status IN ('DRAFT', 'RESERVED')
+          AND expiry_date &lt; #{today}
+    </update>
+
+    <insert id="insertHistory">
+        INSERT INTO reservation_status_history (
+            tenant_id, reservation_id, previous_status, new_status, action_type, remarks, created_by
+        )
+        VALUES (
+            1, #{reservationId}, #{previousStatus}, #{newStatus}, #{actionType}, #{remarks}, #{createdBy}
+        )
+    </insert>
+
+    <select id="findHistory" parameterType="long" resultType="com.eba.reservation.dto.ReservationHistoryDto">
+        SELECT id,
+               reservation_id,
+               previous_status,
+               new_status,
+               action_type,
+               remarks,
+               created_by,
+               CAST(created_date AS VARCHAR) AS created_date
+        FROM reservation_status_history
+        WHERE reservation_id = #{reservationId}
+        ORDER BY id DESC
+    </select>
 
     <update id="softDelete" parameterType="long">
         UPDATE reservation
@@ -165,22 +429,51 @@
 
     <select id="countActiveReservationConflict" resultType="long">
         SELECT COUNT(*)
-        FROM reservation
-        WHERE unit_id = #{unitId}
-          AND is_deleted = FALSE
-          AND reservation_status IN ('DRAFT', 'PENDING_PAYMENT', 'PENDING_APPROVAL', 'CONFIRMED')
-          <if test="excludeId != null">AND id != #{excludeId}</if>
-          AND reservation_date &lt;= #{expiryDate}
-          AND expiry_date &gt;= #{reservationDate}
+        FROM reservation_unit ru
+        INNER JOIN reservation r ON r.id = ru.reservation_id
+        WHERE ru.unit_id = #{unitId}
+          AND ru.is_deleted = FALSE
+          AND r.is_deleted = FALSE
+          AND ru.reservation_status IN ('DRAFT', 'RESERVED')
+          AND r.reservation_status IN ('DRAFT', 'RESERVED')
+          <if test="excludeId != null">AND r.id != #{excludeId}</if>
+          AND r.reservation_date &lt;= #{expiryDate}
+          AND r.expiry_date &gt;= #{reservationDate}
     </select>
+
+    <update id="cancelReservationUnit">
+        UPDATE reservation_unit
+        SET reservation_status = #{status},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE reservation_id = #{reservationId}
+          AND unit_id = #{unitId}
+          AND is_deleted = FALSE
+    </update>
 
     <select id="countActiveLeaseConflict" resultType="long">
         SELECT COUNT(*)
-        FROM pm_lease
-        WHERE unit_id = #{unitId}
+        FROM pm_lease l
+        WHERE l.is_deleted = FALSE
+          AND l.lease_status = 'ACTIVE'
+          AND l.start_date &lt;= #{endDate}
+          AND l.end_date &gt;= #{startDate}
+          AND (
+              l.unit_id = #{unitId}
+              OR EXISTS (
+                  SELECT 1
+                  FROM pm_lease_unit lu
+                  WHERE lu.lease_id = l.id
+                    AND lu.unit_id = #{unitId}
+                    AND lu.is_deleted = FALSE
+              )
+          )
+    </select>
+
+    <select id="countUnavailableUnit" resultType="long">
+        SELECT COUNT(*)
+        FROM unit_master
+        WHERE id = #{unitId}
           AND is_deleted = FALSE
-          AND lease_status = 'ACTIVE'
-          AND start_date &lt;= #{endDate}
-          AND end_date &gt;= #{startDate}
+          AND (status != 'ACTIVE' OR occupancy_status != 'VACANT')
     </select>
 </mapper>

@@ -1,5 +1,7 @@
 package com.eba.reservation.dto;
 
+import java.util.List;
+
 public record ReservationUpsertDto(
     String reservationNumber,
     Long propertyId,
@@ -11,10 +13,14 @@ public record ReservationUpsertDto(
     String paymentStatus,
     String reservationDate,
     String expiryDate,
+    String proposedLeaseStartDate,
+    String proposedLeaseEndDate,
     double quotedRent,
     String currency,
     double depositAmount,
     String createdBy,
-    String notes
+    String leadName,
+    String notes,
+    List<ReservationUnitUpsertDto> units
 ) {
 }
