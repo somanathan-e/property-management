@@ -1,7 +1,7 @@
-# Reservation and Lease Unit Selection Instructions
+# Reservation, Lease, and Unit Availability Instructions
 
 ## Important
-- Keep changes scoped to Reservation, Lease, and the shared unit availability services directly required by those workflows.
+- Keep changes scoped to Reservation, Lease, Unit Availability, and shared availability services directly required by those workflows.
 - Do not refactor unrelated modules, layouts, routes, shared components, database structures, or workflows.
 - Preserve the CoreConnect-aligned module structure, service layer ownership, and MyBatis XML mapper approach.
 
@@ -116,12 +116,13 @@ Variance % = (Variance Amount / Benchmark Rent) * 100
 
 ---
 
-# Availability Rules
+# Availability and Occupancy Rules
 
 Availability must consider:
 
 - selected reservation or lease start date
 - selected reservation or lease end date
+- lease fit-out start date when defined
 - unit availability status
 - inactive units
 - overlapping active reservations
@@ -129,6 +130,70 @@ Availability must consider:
 - units already selected in the current transaction
 
 Validation errors must be explicit and must prevent submission.
+
+Occupancy and inventory rules:
+
+- Total Units comes from master unit inventory only.
+- Creating lease records must not increase total unit count.
+- Occupied Units comes from unit occupancy status.
+- Vacant Units = Total Units - Occupied Units.
+- Lease creation/update may update unit occupancy status, but must not create unit inventory.
+
+Fit-out and free-period rules:
+
+- Fit-Out period occurs before lease start date.
+- A unit becomes unavailable from Fit-Out Start if fit-out is defined.
+- Free Period is included inside the lease duration.
+- A unit becomes available only after the effective lease end date.
+- Lease save validation must reject fit-out dates after lease start and free-period dates outside the lease duration.
+
+---
+
+# Unit Availability Workspace
+
+Route:
+
+```text
+/property-management/unit-availability
+```
+
+Purpose:
+
+- search unit availability across properties and towers
+- view current and future lease/reservation occupancy
+- show the availability timeline for leasing decisions
+
+Filters:
+
+- Property
+- Building/Tower
+- Unit
+- Occupancy Status
+- Availability Period
+- Lease Period
+- Date Range
+
+Display:
+
+- Property
+- Building/Tower
+- Unit No
+- Unit Type
+- Area
+- Current Occupancy Status
+- Current Lease Period
+- Future Reserved/Leased Periods
+- Available From
+- Available To
+- Fit-Out Period
+- Free Period
+- Tenant Details when occupied
+
+Timeline:
+
+```text
+Fit-Out -> Lease -> Free Period inclusion -> Lease End
+```
 
 ---
 
@@ -277,7 +342,7 @@ Display:
 
 # Backend Requirements
 
-Develop only Reservation, Lease, and shared unit-availability APIs/services required by the unit-selection flow.
+Develop only Reservation, Lease, Unit Availability, and shared availability APIs/services required by the unit-selection and availability workflows.
 
 ## APIs Required
 

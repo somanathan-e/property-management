@@ -2,6 +2,50 @@
 
 # Global Navigation Structure
 
+The full enterprise taxonomy is the product target. The current repository implements a pragmatic subset of this taxonomy in `frontend/src/constants/navigation.ts`.
+
+## Current Implemented Navigation
+
+```text
+Dashboard
+├── Executive Overview
+├── Leasing Metrics
+└── Reporting
+
+Property Management
+├── Properties
+├── Towers
+├── Units
+└── Amenities
+
+Lease Management
+├── Reservations
+├── Leases
+└── Unit Availability
+
+CRM
+├── Leads
+├── Opportunities
+└── Prospects
+
+Customers
+├── Customers
+└── Contacts
+
+Assets
+├── Asset Registry
+└── Building Assets
+
+Administration
+├── Users
+├── Roles
+├── Permissions
+├── Configurations
+└── Tenants
+```
+
+## Target Enterprise Navigation
+
 ```text
 Home Dashboard
 │
@@ -308,6 +352,80 @@ The unit-selection modal must:
 - validate live availability before adding a unit
 
 The selected units grid and consolidated summary must match New Reservation, including per-unit Rent Frequency, Benchmark Rent, editable Negotiated Rent, Variance Amount, Variance %, Deposit, and Charges.
+
+### Lease Workspace Layout
+
+The Lease workspace uses property-level grouping only.
+
+Required layout behavior:
+
+- left sticky property summary/navigation panel on desktop
+- single-column layout on mobile
+- collapsible property sections
+- no nested Building/Tower grouping cards or duplicated hierarchy
+- responsive lease cards instead of dense rows
+- compact status badges and More Actions menu
+- lifecycle actions remain linked to the master lease
+
+Property summaries must show:
+
+- Total Units
+- Occupied
+- Vacant
+- Active Leases
+- Expiring Soon
+- Pending Renewals
+- Total Rent
+
+Total Units and Vacant Units must come from master unit inventory, not from lease row counts.
+
+### Unit Availability Workspace
+
+Route:
+
+```text
+/property-management/unit-availability
+```
+
+Purpose:
+
+- search and view unit availability across properties and towers
+- show current and future occupancy and availability periods
+- support responsive card-based scanning for leasing users
+
+Search filters:
+
+- Property
+- Building/Tower
+- Unit
+- Occupancy Status
+- Availability Period
+- Lease Period
+- Date Range
+
+Display fields:
+
+- Property
+- Building/Tower
+- Unit No
+- Unit Type
+- Area
+- Current Occupancy Status
+- Current Lease Period
+- Future Reserved/Leased Periods
+- Available From
+- Available To
+- Fit-Out Period
+- Free Period
+- Tenant Details when occupied
+
+Timeline rule:
+
+```text
+Fit-Out -> Lease Start -> Free Period inclusion -> Lease End
+```
+
+Fit-out blocks availability before lease start. Free period is part of the lease duration, not an additional available period.
 
 ## 4.3 Sales Management
 

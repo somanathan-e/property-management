@@ -88,7 +88,7 @@ Implementation must comply with `TECHSTACK.md`.
 - Hibernate Validator and MapStruct for validation and mapping
 - SLF4J and Log4j for logging
 
-REST APIs, JWT, Docker, Nginx, Swagger/OpenAPI, and Kubernetes are future or adapter concerns unless separately approved. They are not the required baseline for this specification.
+REST APIs, JWT, Docker, Nginx, Swagger/OpenAPI, and Kubernetes are adapter or future concerns unless separately approved. The current repository uses a REST-style Jakarta/Jersey adapter plus Docker/Nginx for local verification, but these do not replace the CoreConnect/CXF service-layer baseline.
 
 ---
 
@@ -146,18 +146,17 @@ Unless approved later, the first baseline does not require:
 
 # 7. Global Navigation and Screen Model
 
-The frontend must implement the navigation structure from `UI-UX-DESIGN.md`.
+The frontend must implement the current navigation structure from `frontend/src/constants/navigation.ts` while preserving the broader enterprise taxonomy in `UI-UX-DESIGN.md` as the target model.
 
-Required groups:
+Currently implemented groups:
 
-- Home Dashboard
+- Dashboard
 - Property Management
-- Customer Management
-- Commercial Management
-- Financial Management
-- Operations Management
-- Governance Management
-- Enterprise Services
+- Lease Management
+- CRM
+- Customers
+- Assets
+- Administration
 
 The application shell must include:
 
@@ -272,6 +271,7 @@ Screens:
 
 - Reservation Management
 - Lease Management
+- Unit Availability Workspace
 - Sales Management
 
 Reservation workflow:
@@ -380,6 +380,33 @@ Lease unit selection:
 - The lease form must use the same selected-unit grid and consolidated summary as reservations.
 - A unit must be revalidated for availability before it is added to the selected units grid.
 
+Lease workspace grouping:
+
+- records are grouped by Property only
+- Building/Tower must not create a second nested grouping card hierarchy
+- property summary headers are collapsible
+- right-side lease records render as responsive cards
+- quick actions are exposed through a More Actions menu
+- lifecycle actions remain linked to the master lease record
+
+Occupancy calculation:
+
+- Total Units must come only from master unit inventory
+- Occupied Units must come from unit occupancy status
+- Vacant Units = Total Units - Occupied Units
+- lease creation and update may update occupancy status but must not increase unit inventory count
+- dashboard, property, and tower summaries must not derive total unit inventory from lease row counts
+
+Unit Availability Workspace:
+
+- route: `/property-management/unit-availability`
+- search by Property, Building/Tower, Unit, Occupancy Status, Availability Period, Lease Period, and Date Range
+- display Property, Building/Tower, Unit No, Unit Type, Area, Current Occupancy Status, Current Lease Period, Future Reserved/Leased Periods, Available From, Available To, Fit-Out Period, Free Period, and Tenant Details
+- show a timeline/calendar-style availability view where practical
+- fit-out period occurs before lease start and blocks availability from fit-out start
+- free period is included inside the lease duration
+- availability must consider fit-out start, lease start, lease end, future leases, and active reservations
+
 Sales Management sections:
 
 - Unit Selection
@@ -393,6 +420,7 @@ Acceptance criteria:
 
 - reservations show unit details, customer summary, and reservation timeline
 - lease records can be created against customer and unit inventory
+- unit availability can be searched across current and future lease/reservation periods
 - new reservations and leases support one-unit and multi-unit transactions through the same unit-selection UI
 - one selected unit is Single Unit; multiple selected units are Multi-Unit
 - customer, property, and currency are document/header-level selections
@@ -407,6 +435,7 @@ Acceptance criteria:
 - lease approval status is visible through a workflow sidebar
 - lease changes are auditable
 - active lease allocation must prevent conflicting occupancy assignment
+- creating a lease must not increase total unit count
 
 ## 8.5 Financial Management
 

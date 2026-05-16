@@ -188,52 +188,44 @@ src/
 Navigation must follow `UI-UX-DESIGN.md`.
 
 ```text
-Home Dashboard
+Dashboard
+ ├── Executive Overview
+ ├── Leasing Metrics
+ └── Reporting
 
 Property Management
- ├── Portfolio Dashboard
- ├── Property Master
- ├── Building & Floor Management
- ├── Unit Master
- ├── Ownership & Legal
- └── Community & Amenities
+ ├── Properties
+ ├── Towers
+ ├── Units
+ └── Amenities
 
-Customer Management
- ├── Customer Dashboard
- ├── Tenant Management
- ├── Broker & Agency
- └── CRM & Leads
+Lease Management
+ ├── Reservations
+ ├── Leases
+ └── Unit Availability
 
-Commercial Management
- ├── Reservation Management
- ├── Lease Management
- └── Sales Management
+CRM
+ ├── Leads
+ ├── Opportunities
+ └── Prospects
 
-Financial Management
- ├── Billing Dashboard
- ├── Payments & Receivables
- ├── Collections & Recovery
- └── Accounting Integration
+Customers
+ ├── Customers
+ └── Contacts
 
-Operations Management
- ├── Maintenance Dashboard
- ├── Preventive Maintenance
- ├── Facility Management
- ├── Vendor Management
- ├── Inspection & Handover
- └── Utility Management
+Assets
+ ├── Asset Registry
+ └── Building Assets
 
-Governance Management
- ├── Document Management
- ├── Workflow & Approvals
- ├── Security & Access
- └── Compliance & Audit
-
-Enterprise Services
- ├── Notifications
- ├── Analytics Dashboard
- └── Integration Console
+Administration
+ ├── Users
+ ├── Roles
+ ├── Permissions
+ ├── Configurations
+ └── Tenants
 ```
+
+This implemented navigation is the current local application shape. The broader enterprise navigation model in `UI-UX-DESIGN.md` remains the target taxonomy as additional modules are built out.
 
 ## 6.4 Core UI Components
 
@@ -321,6 +313,31 @@ Variance % = (Variance Amount / Benchmark Rent) * 100
 ```
 
 The current backend schema persists negotiated unit rent in the existing `rent` column. Benchmark rent, rent frequency, and variance are UI-calculated values unless a future schema change explicitly adds dedicated persistence fields.
+
+## 6.7 Unit Availability Workspace
+
+The Lease Management module includes a dedicated Unit Availability Workspace at:
+
+```text
+/property-management/unit-availability
+```
+
+The workspace must:
+
+- search units across properties and towers
+- display current occupancy from master unit inventory
+- show current lease periods, future reserved/leased periods, available-from dates, fit-out period, free period, and tenant details when occupied
+- visualize the availability timeline as Fit-Out -> Lease -> Free Period inclusion -> Lease End
+- treat fit-out as unavailable time before lease start
+- treat free period as inside the lease duration
+- use clean responsive cards and filters without horizontal overflow
+
+Occupancy calculations must follow these rules:
+
+- Total Units comes only from `unit_master`
+- Occupied Units comes from unit master occupancy status
+- Vacant Units = Total Units - Occupied Units
+- lease creation updates occupancy status only; it must not increase unit inventory count
 
 ---
 
