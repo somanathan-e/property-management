@@ -165,8 +165,8 @@
         WHERE l.is_deleted = FALSE
           AND l.lease_status = 'ACTIVE'
           <if test="excludeId != null">AND l.id != #{excludeId}</if>
-          AND l.start_date &lt;= #{endDate}
-          AND l.end_date &gt;= #{startDate}
+          AND COALESCE(l.fit_out_period_start, l.start_date) &lt;= #{endDate}
+          AND l.end_date &gt;= #{effectiveStartDate}
           AND (
               l.unit_id = #{unitId}
               OR EXISTS (
@@ -189,7 +189,7 @@
           AND ru.reservation_status IN ('DRAFT', 'RESERVED')
           AND r.reservation_status IN ('DRAFT', 'RESERVED')
           AND r.reservation_date &lt;= #{endDate}
-          AND r.expiry_date &gt;= #{startDate}
+          AND r.expiry_date &gt;= #{effectiveStartDate}
     </select>
 
     <select id="countUnavailableUnit" resultType="long">
@@ -223,6 +223,14 @@
             1, #{leaseId}, #{propertyId}, #{unitId}, #{unitNumber}, #{area}, #{rent}, #{additionalCharges}, #{deposit}, #{tax}, #{fitOutPeriod}, #{unitLeaseStatus}
         )
     </insert>
+
+    <update id="updateUnitOccupancy">
+        UPDATE unit_master
+        SET occupancy_status = #{occupancyStatus},
+            updated_date = CURRENT_TIMESTAMP
+        WHERE id = #{unitId}
+          AND is_deleted = FALSE
+    </update>
 
     <delete id="deleteLeaseUnits" parameterType="long">
         DELETE FROM pm_lease_unit WHERE lease_id = #{leaseId}
@@ -369,4 +377,192 @@
         </set>
         WHERE id = #{id} AND is_deleted = FALSE
     </update>
+
+    <sql id="unitAvailabilityAreaExpr">
+        CASE
+            WHEN u.unit_type = 'OFFICE' THEN 1850
+            WHEN u.unit_type = 'RETAIL' THEN 920
+            ELSE 1100
+        END
+    </sql>
+
+    <sql id="unitAvailabilityFilters">
+        WHERE u.is_deleted = FALSE
+        <if test="propertyId != null">AND p.id = #{propertyId}</if>
+        <if test="towerId != null">AND tw.id = #{towerId}</if>
+        <if test="unitSearch != null and unitSearch != ''">
+            AND (LOWER(u.unit_code) LIKE CONCAT('%', LOWER(#{unitSearch}), '%') OR LOWER(u.unit_name) LIKE CONCAT('%', LOWER(#{unitSearch}), '%'))
+        </if>
+        <if test="occupancyStatus != null and occupancyStatus != ''">AND u.occupancy_status = #{occupancyStatus}</if>
+        <if test="leasePeriod != null and leasePeriod != ''">
+            AND EXISTS (
+                SELECT 1
+                FROM pm_lease lp
+                WHERE lp.is_deleted = FALSE
+                  AND lp.unit_id = u.id
+                  AND lp.start_date &lt;= #{leasePeriod}
+                  AND lp.end_date &gt;= #{leasePeriod}
+            )
+        </if>
+        <if test="dateFrom != null and dateFrom != '' and dateTo != null and dateTo != ''">
+            AND (
+                NOT EXISTS (
+                    SELECT 1
+                    FROM pm_lease la
+                    WHERE la.is_deleted = FALSE
+                      AND la.lease_status IN ('ACTIVE', 'PENDING_APPROVAL', 'SUSPENDED', 'TERMINATION_REVIEW')
+                      AND la.unit_id = u.id
+                      AND COALESCE(la.fit_out_period_start, la.start_date) &lt;= #{dateTo}
+                      AND la.end_date &gt;= #{dateFrom}
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM pm_lease lb
+                    WHERE lb.is_deleted = FALSE
+                      AND lb.unit_id = u.id
+                      AND COALESCE(lb.fit_out_period_start, lb.start_date) &lt;= #{dateTo}
+                      AND lb.end_date &gt;= #{dateFrom}
+                )
+            )
+        </if>
+        <if test="availabilityPeriod != null and availabilityPeriod.equals('AVAILABLE') and dateFrom != null and dateFrom != '' and dateTo != null and dateTo != ''">
+            AND NOT EXISTS (
+                SELECT 1
+                FROM pm_lease lc
+                WHERE lc.is_deleted = FALSE
+                  AND lc.lease_status IN ('ACTIVE', 'PENDING_APPROVAL', 'SUSPENDED', 'TERMINATION_REVIEW')
+                  AND lc.unit_id = u.id
+                  AND COALESCE(lc.fit_out_period_start, lc.start_date) &lt;= #{dateTo}
+                  AND lc.end_date &gt;= #{dateFrom}
+            )
+            AND NOT EXISTS (
+                SELECT 1
+                FROM reservation_unit ru
+                INNER JOIN reservation r ON r.id = ru.reservation_id
+                WHERE ru.unit_id = u.id
+                  AND ru.is_deleted = FALSE
+                  AND r.is_deleted = FALSE
+                  AND ru.reservation_status IN ('DRAFT', 'RESERVED')
+                  AND r.reservation_status IN ('DRAFT', 'RESERVED')
+                  AND r.reservation_date &lt;= #{dateTo}
+                  AND r.expiry_date &gt;= #{dateFrom}
+            )
+        </if>
+        <if test="availabilityPeriod != null and availabilityPeriod.equals('UNAVAILABLE') and dateFrom != null and dateFrom != '' and dateTo != null and dateTo != ''">
+            AND (
+                EXISTS (
+                    SELECT 1
+                    FROM pm_lease ld
+                    WHERE ld.is_deleted = FALSE
+                      AND ld.lease_status IN ('ACTIVE', 'PENDING_APPROVAL', 'SUSPENDED', 'TERMINATION_REVIEW')
+                      AND ld.unit_id = u.id
+                      AND COALESCE(ld.fit_out_period_start, ld.start_date) &lt;= #{dateTo}
+                      AND ld.end_date &gt;= #{dateFrom}
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM reservation_unit ru2
+                    INNER JOIN reservation r2 ON r2.id = ru2.reservation_id
+                    WHERE ru2.unit_id = u.id
+                      AND ru2.is_deleted = FALSE
+                      AND r2.is_deleted = FALSE
+                      AND ru2.reservation_status IN ('DRAFT', 'RESERVED')
+                      AND r2.reservation_status IN ('DRAFT', 'RESERVED')
+                      AND r2.reservation_date &lt;= #{dateTo}
+                      AND r2.expiry_date &gt;= #{dateFrom}
+                )
+            )
+        </if>
+    </sql>
+
+    <select id="findUnitAvailability" resultType="com.eba.lease.dto.UnitAvailabilityDto">
+        SELECT
+            u.id AS unit_id,
+            p.id AS property_id,
+            tw.id AS tower_id,
+            p.property_name,
+            tw.tower_name,
+            u.unit_code AS unit_number,
+            u.unit_type,
+            <include refid="unitAvailabilityAreaExpr" /> AS area,
+            'Sq.ft' AS area_unit,
+            u.occupancy_status AS current_occupancy_status,
+            CASE
+                WHEN cl.id IS NULL THEN '-'
+                ELSE CONCAT(CAST(cl.start_date AS VARCHAR), ' to ', CAST(cl.end_date AS VARCHAR))
+            END AS current_lease_period,
+            COALESCE((
+                SELECT GROUP_CONCAT(CONCAT(lf.lease_number, ': ', CAST(COALESCE(lf.fit_out_period_start, lf.start_date) AS VARCHAR), ' to ', CAST(lf.end_date AS VARCHAR)) SEPARATOR '; ')
+                FROM pm_lease lf
+                WHERE lf.is_deleted = FALSE
+                  AND lf.unit_id = u.id
+                  AND COALESCE(lf.fit_out_period_start, lf.start_date) &gt; CURRENT_DATE()
+            ), '-') AS future_periods,
+            CAST(COALESCE((
+                SELECT DATEADD('DAY', 1, MAX(le.end_date))
+                FROM pm_lease le
+                WHERE le.is_deleted = FALSE
+                  AND le.unit_id = u.id
+                  AND le.lease_status IN ('ACTIVE', 'PENDING_APPROVAL', 'SUSPENDED', 'TERMINATION_REVIEW')
+            ), CURRENT_DATE()) AS VARCHAR) AS available_from,
+            '-' AS available_to,
+            CASE
+                WHEN cl.fit_out_period_start IS NULL THEN '-'
+                ELSE CONCAT(CAST(cl.fit_out_period_start AS VARCHAR), ' to ', CAST(cl.fit_out_period_end AS VARCHAR))
+            END AS fit_out_period,
+            CASE
+                WHEN cl.free_period_start IS NULL THEN '-'
+                ELSE CONCAT(CAST(cl.free_period_start AS VARCHAR), ' to ', CAST(cl.free_period_end AS VARCHAR))
+            END AS free_period,
+            COALESCE(c.customer_name, '-') AS tenant_details,
+            CASE
+                WHEN cl.fit_out_period_start IS NOT NULL AND CURRENT_DATE() &gt;= cl.fit_out_period_start AND CURRENT_DATE() &lt; cl.start_date THEN 'FIT_OUT'
+                WHEN cl.id IS NOT NULL THEN 'LEASED'
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM reservation_unit ru
+                    INNER JOIN reservation r ON r.id = ru.reservation_id
+                    WHERE ru.unit_id = u.id
+                      AND ru.is_deleted = FALSE
+                      AND r.is_deleted = FALSE
+                      AND ru.reservation_status IN ('DRAFT', 'RESERVED')
+                      AND r.reservation_status IN ('DRAFT', 'RESERVED')
+                      AND r.reservation_date &lt;= CURRENT_DATE()
+                      AND r.expiry_date &gt;= CURRENT_DATE()
+                ) THEN 'RESERVED'
+                ELSE 'AVAILABLE'
+            END AS timeline_status,
+            CAST(cl.start_date AS VARCHAR) AS current_lease_start,
+            CAST(cl.end_date AS VARCHAR) AS current_lease_end,
+            CAST(cl.fit_out_period_start AS VARCHAR) AS fit_out_start,
+            CAST(cl.fit_out_period_end AS VARCHAR) AS fit_out_end,
+            CAST(cl.free_period_start AS VARCHAR) AS free_period_start,
+            CAST(cl.free_period_end AS VARCHAR) AS free_period_end
+        FROM unit_master u
+        INNER JOIN property p ON p.id = u.property_id
+        INNER JOIN tower tw ON tw.id = u.tower_id
+        LEFT JOIN pm_lease cl ON cl.id = (
+            SELECT l2.id
+            FROM pm_lease l2
+            WHERE l2.is_deleted = FALSE
+              AND l2.unit_id = u.id
+              AND l2.lease_status IN ('ACTIVE', 'PENDING_APPROVAL', 'SUSPENDED', 'TERMINATION_REVIEW')
+              AND COALESCE(l2.fit_out_period_start, l2.start_date) &lt;= CURRENT_DATE()
+              AND l2.end_date &gt;= CURRENT_DATE()
+            ORDER BY COALESCE(l2.fit_out_period_start, l2.start_date), l2.id
+            LIMIT 1
+        )
+        LEFT JOIN customer c ON c.id = cl.customer_id
+        <include refid="unitAvailabilityFilters" />
+        ORDER BY p.property_name, tw.tower_name, u.unit_code
+        LIMIT #{limit} OFFSET #{offset}
+    </select>
+
+    <select id="countUnitAvailability" resultType="long">
+        SELECT COUNT(*)
+        FROM unit_master u
+        INNER JOIN property p ON p.id = u.property_id
+        INNER JOIN tower tw ON tw.id = u.tower_id
+        <include refid="unitAvailabilityFilters" />
+    </select>
 </mapper>

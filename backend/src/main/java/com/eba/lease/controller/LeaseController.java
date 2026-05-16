@@ -8,6 +8,7 @@ import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
 import com.eba.lease.dto.LeaseUnitDto;
 import com.eba.lease.dto.LeaseUpsertDto;
+import com.eba.lease.dto.UnitAvailabilityDto;
 import com.eba.common.config.DatabaseConfig;
 import com.eba.lease.mappers.LeaseMapper;
 import com.eba.lease.service.LeaseService;
@@ -47,6 +48,23 @@ public class LeaseController {
         @QueryParam("size") Integer size
     ) {
         return ApiResponse.success("Leases fetched", leaseService.getLeases(search, leaseStatus, renewalStatus, page, size));
+    }
+
+    @GET
+    @Path("/unit-availability")
+    public ApiResponse<PagedResult<UnitAvailabilityDto>> getUnitAvailability(
+        @QueryParam("propertyId") Long propertyId,
+        @QueryParam("towerId") Long towerId,
+        @QueryParam("unitSearch") String unitSearch,
+        @QueryParam("occupancyStatus") String occupancyStatus,
+        @QueryParam("availabilityPeriod") String availabilityPeriod,
+        @QueryParam("leasePeriod") String leasePeriod,
+        @QueryParam("dateFrom") String dateFrom,
+        @QueryParam("dateTo") String dateTo,
+        @QueryParam("page") Integer page,
+        @QueryParam("size") Integer size
+    ) {
+        return ApiResponse.success("Unit availability fetched", leaseService.getUnitAvailability(propertyId, towerId, unitSearch, occupancyStatus, availabilityPeriod, leasePeriod, dateFrom, dateTo, page, size));
     }
 
     @GET

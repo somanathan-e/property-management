@@ -31,7 +31,8 @@ export const navigationSections: NavigationSection[] = [
     title: "Lease Management",
     items: [
       { label: "Reservations", href: "/reservations", description: "Run unit reservations, payment capture, approval workflow, and lease conversion." },
-      { label: "Leases", href: "/leases", description: "Run lease records, renewals, amendments, and approvals from one workspace." }
+      { label: "Leases", href: "/leases", description: "Run lease records, renewals, amendments, and approvals from one workspace." },
+      { label: "Unit Availability", href: "/unit-availability", description: "Search current and future unit availability across properties and towers." }
     ]
   },
   {

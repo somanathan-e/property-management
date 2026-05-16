@@ -182,6 +182,46 @@ export type AvailableUnitRecord = {
   imageUrl: string;
 };
 
+export type UnitRecord = {
+  id: number;
+  propertyId: number;
+  propertyCode: string;
+  towerId: number;
+  towerCode: string;
+  unitCode: string;
+  unitName: string;
+  unitType: string;
+  occupancyStatus: string;
+  status: string;
+};
+
+export type UnitAvailabilityRecord = {
+  unitId: number;
+  propertyId: number;
+  towerId: number;
+  propertyName: string;
+  towerName: string;
+  unitNumber: string;
+  unitType: string;
+  area: number;
+  areaUnit: string;
+  currentOccupancyStatus: string;
+  currentLeasePeriod: string;
+  futurePeriods: string;
+  availableFrom: string;
+  availableTo: string;
+  fitOutPeriod: string;
+  freePeriod: string;
+  tenantDetails: string;
+  timelineStatus: string;
+  currentLeaseStart: string | null;
+  currentLeaseEnd: string | null;
+  fitOutStart: string | null;
+  fitOutEnd: string | null;
+  freePeriodStart: string | null;
+  freePeriodEnd: string | null;
+};
+
 export type ReservationHistoryRecord = {
   id: number;
   reservationId: number;

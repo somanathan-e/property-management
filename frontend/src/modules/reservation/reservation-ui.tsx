@@ -359,6 +359,7 @@ export function ReservationWorkspacePage() {
   }
 
   function addSelectedUnit(unit: AvailableUnitRecord) {
+    setError(null);
     if (unit.availabilityStatus !== "AVAILABLE") {
       setError("Only available units can be selected.");
       return;
@@ -371,24 +372,24 @@ export function ReservationWorkspacePage() {
       setError("Multiple-unit reservations can include units from one property only.");
       return;
     }
-    if (unit.currency !== reservationForm.currency) {
+    if (selectedUnits.length > 0 && unit.currency !== selectedUnits[0].currency) {
       setError("Selected units must use the reservation currency.");
       return;
     }
     const selectedUnit = buildSelectedUnit(unit);
-    setSelectedUnits((current) => [...current, selectedUnit]);
-    setReservationForm((current) => {
-      const nextUnits = [...selectedUnits, selectedUnit];
+    setSelectedUnits((current) => {
+      const nextUnits = [...current, selectedUnit];
       const totals = selectedUnitTotals(nextUnits);
-      return {
-        ...current,
-        propertyId: String(unit.propertyId),
-        towerId: current.towerId || String(unit.towerId),
+      setReservationForm((form) => ({
+        ...form,
+        propertyId: String(nextUnits[0].propertyId),
+        towerId: form.towerId || String(nextUnits[0].towerId),
         unitId: String(nextUnits[0].unitId),
         quotedRent: String(totals.negotiatedRent),
         depositAmount: String(totals.deposit),
-        currency: unit.currency
-      };
+        currency: nextUnits[0].currency
+      }));
+      return nextUnits;
     });
   }
 
@@ -402,7 +403,8 @@ export function ReservationWorkspacePage() {
         towerId: nextUnits[0] ? String(nextUnits[0].towerId) : form.towerId,
         unitId: nextUnits[0] ? String(nextUnits[0].unitId) : "",
         quotedRent: nextUnits.length > 0 ? String(totals.negotiatedRent) : "",
-        depositAmount: nextUnits.length > 0 ? String(totals.deposit) : ""
+        depositAmount: nextUnits.length > 0 ? String(totals.deposit) : "",
+        currency: nextUnits[0]?.currency ?? form.currency
       }));
       return nextUnits;
     });
@@ -1051,7 +1053,8 @@ function ReservationFormModal({
           required
           onChange={(updater: React.SetStateAction<ReservationFormState>) => {
             const next = typeof updater === "function" ? updater(form) : updater;
-            onChange((current) => ({ ...current, propertyId: next.propertyId, towerId: "", unitId: "" }));
+            const propertyUnit = availableUnits.find((unit) => String(unit.propertyId) === next.propertyId);
+            onChange((current) => ({ ...current, propertyId: next.propertyId, towerId: "", unitId: "", currency: propertyUnit?.currency ?? current.currency }));
             onSearchUnits({ propertyId: next.propertyId });
           }}
           options={propertyOptions}

@@ -5,6 +5,7 @@ import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
 import com.eba.lease.dto.LeaseUpsertDto;
 import com.eba.lease.dto.LeaseUnitDto;
+import com.eba.lease.dto.UnitAvailabilityDto;
 import java.util.List;
 import org.apache.ibatis.annotations.Param;
 
@@ -17,15 +18,17 @@ public interface LeaseMapper {
 
     LeaseDto findByLeaseNumber(String leaseNumber);
 
-    long countActiveLeaseConflict(@Param("unitId") Long unitId, @Param("startDate") String startDate, @Param("endDate") String endDate, @Param("excludeId") Long excludeId);
+    long countActiveLeaseConflict(@Param("unitId") Long unitId, @Param("startDate") String startDate, @Param("effectiveStartDate") String effectiveStartDate, @Param("endDate") String endDate, @Param("excludeId") Long excludeId);
 
-    long countActiveReservationConflict(@Param("unitId") Long unitId, @Param("startDate") String startDate, @Param("endDate") String endDate);
+    long countActiveReservationConflict(@Param("unitId") Long unitId, @Param("effectiveStartDate") String effectiveStartDate, @Param("endDate") String endDate);
 
     long countUnavailableUnit(@Param("unitId") Long unitId);
 
     void insert(LeaseUpsertDto request);
 
     void insertLeaseUnit(@Param("leaseId") Long leaseId, @Param("propertyId") Long propertyId, @Param("unitId") Long unitId, @Param("unitNumber") String unitNumber, @Param("area") double area, @Param("rent") double rent, @Param("additionalCharges") double additionalCharges, @Param("deposit") double deposit, @Param("tax") double tax, @Param("fitOutPeriod") String fitOutPeriod, @Param("unitLeaseStatus") String unitLeaseStatus);
+
+    void updateUnitOccupancy(@Param("unitId") Long unitId, @Param("occupancyStatus") String occupancyStatus);
 
     void deleteLeaseUnits(Long leaseId);
 
@@ -52,5 +55,29 @@ public interface LeaseMapper {
         @Param("unitId") Long unitId,
         @Param("versionNumber") Integer versionNumber,
         @Param("notes") String notes
+    );
+
+    List<UnitAvailabilityDto> findUnitAvailability(
+        @Param("propertyId") Long propertyId,
+        @Param("towerId") Long towerId,
+        @Param("unitSearch") String unitSearch,
+        @Param("occupancyStatus") String occupancyStatus,
+        @Param("availabilityPeriod") String availabilityPeriod,
+        @Param("leasePeriod") String leasePeriod,
+        @Param("dateFrom") String dateFrom,
+        @Param("dateTo") String dateTo,
+        @Param("limit") int limit,
+        @Param("offset") int offset
+    );
+
+    long countUnitAvailability(
+        @Param("propertyId") Long propertyId,
+        @Param("towerId") Long towerId,
+        @Param("unitSearch") String unitSearch,
+        @Param("occupancyStatus") String occupancyStatus,
+        @Param("availabilityPeriod") String availabilityPeriod,
+        @Param("leasePeriod") String leasePeriod,
+        @Param("dateFrom") String dateFrom,
+        @Param("dateTo") String dateTo
     );
 }

@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { AppShell } from "@/layouts/app-shell";
 import { apiGet, apiPost, apiPut } from "@/services/api";
 import type { PagedResult } from "@/types/api";
-import type { AvailableUnitRecord, CustomerRecord, LeaseRecord, LeaseTransactionRecord, LeaseUnitRecord, PropertyRecord } from "@/types/entities";
+import type { AvailableUnitRecord, CustomerRecord, LeaseRecord, LeaseTransactionRecord, LeaseUnitRecord, PropertyRecord, UnitAvailabilityRecord, UnitRecord } from "@/types/entities";
 
 type Option = {
   label: string;
@@ -14,18 +14,48 @@ type Option = {
 };
 
 type Tone = "accent" | "warn" | "neutral";
+type PropertySummary = {
+  propertyId: number;
+  propertyName: string;
+  totalUnits: number;
+  occupied: number;
+  vacant: number;
+  activeLeases: number;
+  expiringSoon: number;
+  pendingRenewals: number;
+  pendingApprovals: number;
+  totalRent: number;
+  currency: string;
+  occupancyPercent: number;
+};
+
+type TowerLeaseGroup = {
+  towerId: number;
+  towerName: string;
+  leases: LeaseRecord[];
+};
+
+type PropertyLeaseGroup = PropertySummary & {
+  leases: LeaseRecord[];
+  towers: TowerLeaseGroup[];
+};
 
 type TowerOption = {
   id: number;
+  propertyId: number;
   towerName: string;
   towerCode: string;
 };
 
 type UnitOption = {
   id: number;
+  propertyId: number;
   unitName: string;
   unitCode: string;
+  unitType: string;
+  occupancyStatus: string;
   towerCode: string;
+  towerId: number;
 };
 
 type LeaseFormState = Record<string, string>;
@@ -159,6 +189,10 @@ function firstMissingField(form: Record<string, string>, fields: { name: string;
   return fields.find((field) => !String(form[field.name] ?? "").trim())?.label ?? null;
 }
 
+function isDateAfter(left: string, right: string) {
+  return Boolean(left && right && left > right);
+}
+
 function availableUnitRent(unit: AvailableUnitRecord, rentFrequency: string) {
   return rentFrequency === "ANNUAL" ? unit.monthlyRent * 12 : unit.monthlyRent;
 }
@@ -258,6 +292,69 @@ function transactionTitle(type: string) {
   return type.replaceAll("_", " ");
 }
 
+function leaseRent(lease: LeaseRecord) {
+  return lease.totalRent || lease.rentAmount;
+}
+
+function leaseUnitCount(lease: LeaseRecord) {
+  return Math.max(lease.totalLeaseUnits || 1, 1);
+}
+
+function summarizeProperty(leases: LeaseRecord[], inventoryUnits: UnitRecord[] = []): PropertySummary {
+  const firstLease = leases[0];
+  const totalUnits = inventoryUnits.length;
+  const occupied = inventoryUnits.filter((unit) => unit.occupancyStatus === "OCCUPIED").length;
+  const vacant = Math.max(totalUnits - occupied, 0);
+  const activeLeases = leases.filter((lease) => lease.leaseStatus === "ACTIVE").length;
+  const expiringSoon = leases.filter((lease) => daysTo(lease.endDate) <= 60).length;
+  const pendingRenewals = leases.filter((lease) => ["DUE_SOON", "UNDER_REVIEW"].includes(lease.renewalStatus)).length;
+  const pendingApprovals = leases.filter((lease) => lease.approvalStatus !== "APPROVED").length;
+  const totalRent = leases.reduce((sum, lease) => sum + leaseRent(lease), 0);
+  return {
+    propertyId: firstLease?.propertyId ?? 0,
+    propertyName: firstLease?.propertyName ?? "Unassigned Property",
+    totalUnits,
+    occupied,
+    vacant,
+    activeLeases,
+    expiringSoon,
+    pendingRenewals,
+    pendingApprovals,
+    totalRent,
+    currency: firstLease?.currency ?? "AED",
+    occupancyPercent: totalUnits > 0 ? clampPercent((occupied / totalUnits) * 100) : 0
+  };
+}
+
+function buildPropertyLeaseGroups(leases: LeaseRecord[], units: UnitRecord[] = []): PropertyLeaseGroup[] {
+  const grouped = new Map<number, LeaseRecord[]>();
+  leases.forEach((lease) => {
+    const propertyLeases = grouped.get(lease.propertyId) ?? [];
+    propertyLeases.push(lease);
+    grouped.set(lease.propertyId, propertyLeases);
+  });
+  return Array.from(grouped.values())
+    .map((propertyLeases) => {
+      const towerMap = new Map<number, LeaseRecord[]>();
+      propertyLeases.forEach((lease) => {
+        const towerLeases = towerMap.get(lease.towerId) ?? [];
+        towerLeases.push(lease);
+        towerMap.set(lease.towerId, towerLeases);
+      });
+      const summary = summarizeProperty(propertyLeases, units.filter((unit) => unit.propertyId === propertyLeases[0]?.propertyId));
+      return {
+        ...summary,
+        leases: propertyLeases,
+        towers: Array.from(towerMap.values()).map((towerLeases) => ({
+          towerId: towerLeases[0]?.towerId ?? 0,
+          towerName: towerLeases[0]?.towerName ?? "Unassigned Tower",
+          leases: towerLeases
+        }))
+      };
+    })
+    .sort((left, right) => left.propertyName.localeCompare(right.propertyName));
+}
+
 function badgeTone(label: string) {
   const normalized = label.toUpperCase();
   if (["ACTIVE", "APPROVED", "COMPLETED", "RENEWED", "RECEIVED", "OCCUPIED"].includes(normalized)) {
@@ -280,6 +377,10 @@ export function LeaseWorkspacePage() {
   const router = useRouter();
   const [records, setRecords] = useState<LeaseRecord[]>([]);
   const [search, setSearch] = useState("");
+  const [propertyNavSearch, setPropertyNavSearch] = useState("");
+  const [selectedPropertyId, setSelectedPropertyId] = useState<number | null>(null);
+  const [collapsedProperties, setCollapsedProperties] = useState<Record<number, boolean>>({});
+  const [propertySidebarOpen, setPropertySidebarOpen] = useState(false);
   const [leaseStatus, setLeaseStatus] = useState("");
   const [renewalStatus, setRenewalStatus] = useState("");
   const [page, setPage] = useState(1);
@@ -345,7 +446,7 @@ export function LeaseWorkspacePage() {
   );
   const [properties, setProperties] = useState<PropertyRecord[]>([]);
   const [towers, setTowers] = useState<TowerOption[]>([]);
-  const [units, setUnits] = useState<UnitOption[]>([]);
+  const [units, setUnits] = useState<UnitRecord[]>([]);
   const [customers, setCustomers] = useState<CustomerRecord[]>([]);
 
   const queryString = useMemo(() => {
@@ -444,7 +545,7 @@ export function LeaseWorkspacePage() {
     void Promise.all([
       apiGet<PagedResult<PropertyRecord>>("/properties?size=100"),
       apiGet<PagedResult<TowerOption>>("/towers?size=100"),
-      apiGet<PagedResult<UnitOption>>("/units?size=100"),
+      apiGet<PagedResult<UnitRecord>>("/units?size=100"),
       apiGet<PagedResult<CustomerRecord>>("/customers?size=100")
     ]).then(([propertyData, towerData, unitData, customerData]) => {
       setProperties(propertyData.items);
@@ -455,17 +556,48 @@ export function LeaseWorkspacePage() {
   }, []);
 
   const kpis = useMemo(() => {
-    const expiring = records.filter((record) => daysTo(record.endDate) <= 60).length;
+    const expiring30 = records.filter((record) => daysTo(record.endDate) <= 30).length;
+    const expiring60 = records.filter((record) => daysTo(record.endDate) <= 60).length;
     const active = records.filter((record) => record.leaseStatus === "ACTIVE").length;
-    const renewalDue = records.filter((record) => record.renewalStatus === "DUE_SOON" || record.renewalStatus === "UNDER_REVIEW").length;
-    const vacant = records.filter((record) => record.occupancyStatus === "VACANT").length;
+    const vacant = units.filter((unit) => unit.occupancyStatus === "VACANT").length;
+    const pendingApprovals = records.filter((record) => record.approvalStatus !== "APPROVED").length;
+    const revenue = records.reduce((sum, record) => sum + leaseRent(record), 0);
     return [
+      { label: "Properties", value: String(new Set(records.map((record) => record.propertyId)).size), note: "Grouped portfolios", tone: "neutral" as Tone },
       { label: "Active Leases", value: String(active), note: "Live contractual occupancy", tone: "accent" as Tone },
-      { label: "Expiring Soon", value: String(expiring), note: "60-day watchlist", tone: "warn" as Tone },
-      { label: "Renewal Due", value: String(renewalDue), note: "Commercial action required", tone: "accent" as Tone },
-      { label: "Vacant Occupancy", value: String(vacant), note: "Space requiring action", tone: "neutral" as Tone }
+      { label: "Vacant Units", value: String(vacant), note: "Space requiring action", tone: "warn" as Tone },
+      { label: "Expiring 30/60 Days", value: `${expiring30}/${expiring60}`, note: "Near-term watchlist", tone: "warn" as Tone },
+      { label: "Pending Approvals", value: String(pendingApprovals), note: "Approval queue", tone: "accent" as Tone },
+      { label: "Revenue", value: formatMoney(revenue, records[0]?.currency ?? "AED"), note: "Current page rent", tone: "neutral" as Tone }
     ];
-  }, [records]);
+  }, [records, units]);
+
+  const propertyGroups = useMemo(() => buildPropertyLeaseGroups(records, units), [records, units]);
+  const visiblePropertyGroups = useMemo(() => {
+    const navQuery = propertyNavSearch.trim().toLowerCase();
+    return propertyGroups.filter((group) => {
+      const matchesSelected = selectedPropertyId ? group.propertyId === selectedPropertyId : true;
+      const matchesQuery = navQuery ? group.propertyName.toLowerCase().includes(navQuery) : true;
+      return matchesSelected && matchesQuery;
+    });
+  }, [propertyGroups, propertyNavSearch, selectedPropertyId]);
+
+  const portfolioSummary = useMemo(() => {
+    const summaries = propertyGroups.map((group) => summarizeProperty(group.leases, units.filter((unit) => unit.propertyId === group.propertyId)));
+    const totalRent = summaries.reduce((sum, summary) => sum + summary.totalRent, 0);
+    return {
+      totalRent,
+      properties: summaries.length,
+      currency: summaries[0]?.currency ?? "AED"
+    };
+  }, [propertyGroups, units]);
+
+  function focusProperty(propertyId: number) {
+    setSelectedPropertyId((current) => (current === propertyId ? null : propertyId));
+    window.requestAnimationFrame(() => {
+      document.getElementById(`lease-property-${propertyId}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
 
   function openCreateLease() {
     setEditingLease(null);
@@ -488,6 +620,7 @@ export function LeaseWorkspacePage() {
   }
 
   function addLeaseUnit(unit: AvailableUnitRecord) {
+    setError(null);
     if (unit.availabilityStatus !== "AVAILABLE") {
       setError("Only available units can be selected.");
       return;
@@ -500,23 +633,25 @@ export function LeaseWorkspacePage() {
       setError("Multiple-unit leases can include units from one property only.");
       return;
     }
-    if (unit.currency !== leaseForm.currency) {
+    if (selectedLeaseUnits.length > 0 && unit.currency !== selectedLeaseUnits[0].currency) {
       setError("Selected units must use the lease currency.");
       return;
     }
     const selectedUnit = buildSelectedLeaseUnit(unit);
-    const nextUnits = [...selectedLeaseUnits, selectedUnit];
-    const totals = selectedAvailableUnitTotals(nextUnits);
-    setSelectedLeaseUnits(nextUnits);
-    setLeaseForm((current) => ({
-      ...current,
-      propertyId: String(nextUnits[0].propertyId),
-      towerId: current.towerId || String(nextUnits[0].towerId),
-      unitId: String(nextUnits[0].unitId),
-      rentAmount: String(totals.negotiatedRent),
-      securityDeposit: String(totals.deposit),
-      currency: nextUnits[0].currency
-    }));
+    setSelectedLeaseUnits((current) => {
+      const nextUnits = [...current, selectedUnit];
+      const totals = selectedAvailableUnitTotals(nextUnits);
+      setLeaseForm((form) => ({
+        ...form,
+        propertyId: String(nextUnits[0].propertyId),
+        towerId: form.towerId || String(nextUnits[0].towerId),
+        unitId: String(nextUnits[0].unitId),
+        rentAmount: String(totals.negotiatedRent),
+        securityDeposit: String(totals.deposit),
+        currency: nextUnits[0].currency
+      }));
+      return nextUnits;
+    });
   }
 
   function removeLeaseUnit(unit: Pick<AvailableUnitRecord, "unitId">) {
@@ -529,7 +664,8 @@ export function LeaseWorkspacePage() {
         propertyId: nextUnits[0] ? String(nextUnits[0].propertyId) : form.propertyId,
         towerId: nextUnits[0] ? String(nextUnits[0].towerId) : form.towerId,
         rentAmount: nextUnits.length > 0 ? String(totals.negotiatedRent) : "",
-        securityDeposit: nextUnits.length > 0 ? String(totals.deposit) : ""
+        securityDeposit: nextUnits.length > 0 ? String(totals.deposit) : "",
+        currency: nextUnits[0]?.currency ?? form.currency
       }));
       return nextUnits;
     });
@@ -592,6 +728,41 @@ export function LeaseWorkspacePage() {
     ]);
     if (missingField) {
       setError(`${missingField} is required.`);
+      return;
+    }
+    if (isDateAfter(leaseForm.startDate, leaseForm.endDate)) {
+      setError("Lease start date cannot be after lease end date.");
+      setLeaseFormTab("period");
+      return;
+    }
+    if (isDateAfter(leaseForm.fitOutPeriodStart, leaseForm.fitOutPeriodEnd)) {
+      setError("Fit-out start date cannot be after fit-out end date.");
+      setLeaseFormTab("period");
+      return;
+    }
+    if (leaseForm.fitOutPeriodStart && isDateAfter(leaseForm.fitOutPeriodStart, leaseForm.startDate)) {
+      setError("Fit-out must start before the lease start date.");
+      setLeaseFormTab("period");
+      return;
+    }
+    if (leaseForm.fitOutPeriodEnd && isDateAfter(leaseForm.fitOutPeriodEnd, leaseForm.startDate)) {
+      setError("Fit-out must end before the lease start date.");
+      setLeaseFormTab("period");
+      return;
+    }
+    if (isDateAfter(leaseForm.freePeriodStart, leaseForm.freePeriodEnd)) {
+      setError("Free period start date cannot be after free period end date.");
+      setLeaseFormTab("period");
+      return;
+    }
+    if (leaseForm.freePeriodStart && (isDateAfter(leaseForm.startDate, leaseForm.freePeriodStart) || isDateAfter(leaseForm.freePeriodStart, leaseForm.endDate))) {
+      setError("Free period must be within the lease duration.");
+      setLeaseFormTab("period");
+      return;
+    }
+    if (leaseForm.freePeriodEnd && (isDateAfter(leaseForm.startDate, leaseForm.freePeriodEnd) || isDateAfter(leaseForm.freePeriodEnd, leaseForm.endDate))) {
+      setError("Free period must be within the lease duration.");
+      setLeaseFormTab("period");
       return;
     }
     const unitsForPayload = selectedLeaseUnits;
@@ -773,172 +944,202 @@ export function LeaseWorkspacePage() {
               </div>
             </div>
           </div>
-          <div className="grid gap-4 px-6 py-5 md:grid-cols-2 xl:grid-cols-4 md:px-8">
+          <div className="grid gap-4 px-5 py-5 sm:grid-cols-2 md:px-8 lg:grid-cols-3 xl:grid-cols-6">
             {kpis.map((card) => (
               <MetricCard key={card.label} label={card.label} value={card.value} note={card.note} tone={card.tone} />
             ))}
           </div>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.35fr)_320px]">
-          <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
-              <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-steel">Lease Workspace</p>
-                <h4 className="mt-2 text-2xl font-semibold text-ink">Search, filter, and action master leases</h4>
-                <p className="mt-2 text-sm text-steel">
-                  Renewal, extension, amendment, rent revision, suspension, termination, cancellation, and transfer stay connected to the original lease.
-                </p>
-              </div>
-              <button type="button" onClick={openCreateLease} className="rounded-2xl bg-accent px-5 py-3 text-sm font-medium text-white shadow-sm shadow-blue-300/40">
-                Create Lease
+        <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <p className="text-xs uppercase tracking-[0.24em] text-steel">Lease Workspace</p>
+              <h4 className="mt-2 text-2xl font-semibold text-ink">Property-wise lease lifecycle hierarchy</h4>
+              <p className="mt-2 text-sm text-steel">
+                Renewal, amendment, extension, rent revision, suspension, termination, cancellation, and transfer stay linked to each master lease.
+              </p>
+            </div>
+            <button type="button" onClick={openCreateLease} className="rounded-2xl bg-accent px-5 py-3 text-sm font-medium text-white shadow-sm shadow-blue-300/40">
+              Create Lease
+            </button>
+          </div>
+          <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+            <input
+              value={search}
+              onChange={(event) => {
+                setSearch(event.target.value);
+                setPage(1);
+              }}
+              placeholder="Search lease, tenant, property, or unit"
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white xl:col-span-2"
+            />
+            <select
+              value={leaseStatus}
+              onChange={(event) => {
+                setLeaseStatus(event.target.value);
+                setPage(1);
+              }}
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white"
+            >
+              <option value="">All Lease Statuses</option>
+              {leaseStatusOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <select
+              value={renewalStatus}
+              onChange={(event) => {
+                setRenewalStatus(event.target.value);
+                setPage(1);
+              }}
+              className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white"
+            >
+              <option value="">All Renewal Statuses</option>
+              {renewalStatusOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <button type="button" onClick={() => void loadWorkspace()} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-ink transition hover:bg-cloud">
+              Refresh Workspace
+            </button>
+          </div>
+          <div className="mt-4 flex flex-wrap items-center gap-3 text-sm">
+            {selectedPropertyId ? (
+              <button type="button" onClick={() => setSelectedPropertyId(null)} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 font-medium text-ink hover:bg-cloud">
+                Clear property focus
               </button>
-            </div>
-            <div className="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <input
-                value={search}
-                onChange={(event) => {
-                  setSearch(event.target.value);
-                  setPage(1);
-                }}
-                placeholder="Search lease, tenant, property, or unit"
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white"
-              />
-              <select
-                value={leaseStatus}
-                onChange={(event) => {
-                  setLeaseStatus(event.target.value);
-                  setPage(1);
-                }}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white"
-              >
-                <option value="">All Lease Statuses</option>
-                {leaseStatusOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={renewalStatus}
-                onChange={(event) => {
-                  setRenewalStatus(event.target.value);
-                  setPage(1);
-                }}
-                className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white"
-              >
-                <option value="">All Renewal Statuses</option>
-                {renewalStatusOptions.map((option) => (
-                  <option key={option} value={option}>
-                    {option}
-                  </option>
-                ))}
-              </select>
-              <button type="button" onClick={() => void loadWorkspace()} className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-ink transition hover:bg-cloud">
-                Refresh Workspace
-              </button>
-            </div>
-            {message ? <p className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
-            {error ? <p className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
-          </article>
-
-          <article className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-            <p className="text-xs uppercase tracking-[0.24em] text-steel">Operational Focus</p>
-            <div className="mt-4 space-y-3">
-              <FocusLine label="Expiring In 60 Days" value={kpis[1]?.value ?? "0"} />
-              <FocusLine label="Renewals Under Review" value={String(records.filter((record) => record.renewalStatus === "UNDER_REVIEW").length)} />
-              <FocusLine label="Pending Approvals" value={String(records.filter((record) => record.approvalStatus !== "APPROVED").length)} />
-              <FocusLine label="Latest Transactions" value={String(records.filter((record) => record.latestTransactionType !== "LEASE").length)} />
-            </div>
-          </article>
+            ) : null}
+          </div>
+          {message ? <p className="mt-4 rounded-2xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{message}</p> : null}
+          {error ? <p className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
         </section>
 
-        <section className="rounded-[28px] border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-xs uppercase tracking-[0.24em] text-steel">Master Lease Register</p>
-              <h4 className="mt-2 text-xl font-semibold text-ink">Lease records with embedded lifecycle actions</h4>
-            </div>
-            <span className="rounded-full bg-cloud px-3 py-1 text-xs font-medium text-steel">{total} lease records</span>
-          </div>
-          <div className="mt-6 rounded-[24px] border border-slate-200">
-            {loading ? (
-              <p className="p-6 text-sm text-steel">Loading leases...</p>
-            ) : records.length === 0 ? (
-              <div className="rounded-[24px] bg-cloud p-6 text-sm text-steel">No leases matched the current search and filters.</div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="min-w-[1400px] text-left text-sm">
-                  <thead className="bg-slate-50 text-steel">
-                    <tr>
-                      {["Lease Number", "Property", "Building / Tower", "Unit", "Tenant", "Lease Type", "Start Date", "End Date", "Lease Status", "Occupancy Status", "Rent Amount", "Currency", "Security Deposit", "Renewal Status", "Parent Lease Reference", "Version Number", "Created By", "Created Date", "Actions"].map((label) => (
-                        <th key={label} className="px-4 py-4 font-medium">
-                          {label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {records.map((lease) => (
-                      <tr key={lease.id} className="border-t border-slate-100 align-top transition hover:bg-slate-50/80">
-                        <td className="px-4 py-4 font-medium text-ink">
-                          <Link href={`/leases/${lease.id}`} className="hover:text-accent">
-                            {lease.leaseNumber}
-                          </Link>
-                          <p className="mt-1 text-xs uppercase tracking-[0.16em] text-steel">{lease.latestTransactionType}</p>
-                        </td>
-                        <td className="px-4 py-4 text-steel">{lease.propertyName}</td>
-                        <td className="px-4 py-4 text-steel">{lease.towerName}</td>
-                        <td className="px-4 py-4 text-steel">{lease.unitCode}</td>
-                        <td className="px-4 py-4 text-steel">{lease.customerName}</td>
-                        <td className="px-4 py-4 text-steel">{lease.leaseType}</td>
-                        <td className="px-4 py-4 text-steel">{lease.startDate}</td>
-                        <td className="px-4 py-4 text-steel">{lease.endDate}</td>
-                        <td className="px-4 py-4">
-                          <Badge label={lease.leaseStatus} />
-                        </td>
-                        <td className="px-4 py-4">
-                          <Badge label={lease.occupancyStatus} />
-                        </td>
-                        <td className="px-4 py-4 text-steel">{lease.rentAmount.toLocaleString()}</td>
-                        <td className="px-4 py-4 text-steel">{lease.currency}</td>
-                        <td className="px-4 py-4 text-steel">{lease.securityDeposit.toLocaleString()}</td>
-                        <td className="px-4 py-4">
-                          <Badge label={lease.renewalStatus} />
-                        </td>
-                        <td className="px-4 py-4 text-steel">{lease.parentLeaseReference ?? "-"}</td>
-                        <td className="px-4 py-4 text-steel">{lease.versionNumber}</td>
-                        <td className="px-4 py-4 text-steel">{lease.createdBy}</td>
-                        <td className="px-4 py-4 text-steel">{lease.createdDate.slice(0, 10)}</td>
-                        <td className="px-4 py-4">
-                          <details className="relative">
-                            <summary className="cursor-pointer rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-ink shadow-sm">Actions</summary>
-                            <div className="absolute right-0 z-10 mt-2 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-card">
-                              {["View Lease 360", "Edit Lease", "Renew Lease", "Extend Lease", "Expand Lease", "Contract Lease", "Amend Lease", "Revise Rent", "Suspend Lease", "Resume Lease", "Terminate Lease", "Cancel Lease", "Lease Transfer", "View History", "View Documents", "View Audit Trail"].map((label) => (
-                                <button key={label} type="button" onClick={() => handleLeaseAction(label, lease)} className="block w-full rounded-xl px-3 py-2 text-left text-xs text-ink hover:bg-cloud">
-                                  {label}
-                                </button>
-                              ))}
-                            </div>
-                          </details>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+        <section className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+          <aside className="xl:sticky xl:top-6 xl:self-start">
+            <button
+              type="button"
+              onClick={() => setPropertySidebarOpen((value) => !value)}
+              className="mb-3 flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white px-4 py-3 text-left text-sm font-semibold text-ink shadow-sm xl:hidden"
+            >
+              <span>Property Summary</span>
+              <span className="text-xs font-medium text-steel">{propertySidebarOpen ? "Hide" : "Show"}</span>
+            </button>
+            <div className={`${propertySidebarOpen ? "block" : "hidden"} rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm xl:block`}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs uppercase tracking-[0.24em] text-steel">Properties</p>
+                  <h4 className="mt-2 text-lg font-semibold text-ink">Summary Navigation</h4>
+                </div>
+                <span className="rounded-full bg-cloud px-3 py-1 text-xs font-medium text-steel">{portfolioSummary.properties}</span>
               </div>
-            )}
-          </div>
-          <div className="mt-5 flex items-center justify-between text-sm text-steel">
-            <span>Page {page} · {total} total leases</span>
-            <div className="flex gap-2">
-              <button type="button" disabled={page === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50">
-                Previous
-              </button>
-              <button type="button" disabled={page * 8 >= total} onClick={() => setPage((value) => value + 1)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50">
-                Next
-              </button>
+              <input
+                value={propertyNavSearch}
+                onChange={(event) => setPropertyNavSearch(event.target.value)}
+                placeholder="Filter properties"
+                className="mt-4 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none transition focus:border-accent focus:bg-white"
+              />
+              <div className="mt-4 max-h-[calc(100vh-220px)] space-y-3 overflow-y-auto pr-1">
+                {propertyGroups
+                  .filter((group) => group.propertyName.toLowerCase().includes(propertyNavSearch.trim().toLowerCase()))
+                  .map((group) => (
+                    <button
+                      key={group.propertyId}
+                      type="button"
+                      onClick={() => focusProperty(group.propertyId)}
+                      className={`w-full rounded-2xl border p-4 text-left transition hover:border-blue-200 hover:bg-blue-50/40 ${
+                        selectedPropertyId === group.propertyId ? "border-blue-300 bg-blue-50" : "border-slate-200 bg-white"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-ink">{group.propertyName}</p>
+                          <p className="mt-1 text-xs text-steel">{group.occupancyPercent}% occupied</p>
+                        </div>
+                        <Badge label={`${group.expiringSoon} exp`} />
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-steel">
+                        <span>Active: <strong className="text-ink">{group.activeLeases}</strong></span>
+                        <span>Vacant: <strong className="text-ink">{group.vacant}</strong></span>
+                        <span>Units: <strong className="text-ink">{group.totalUnits}</strong></span>
+                        <span>Rent: <strong className="text-ink">{formatMoney(group.totalRent, group.currency)}</strong></span>
+                      </div>
+                      <div className="mt-3 h-2 rounded-full bg-slate-100">
+                        <div className="h-2 rounded-full bg-blue-600" style={{ width: `${group.occupancyPercent}%` }} />
+                      </div>
+                    </button>
+                  ))}
+              </div>
             </div>
+          </aside>
+
+          <div className="space-y-5 min-w-0">
+            <section className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5 lg:p-6">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="text-xs uppercase tracking-[0.24em] text-steel">Grouped Workspace</p>
+                <h4 className="mt-2 text-xl font-semibold text-ink">Flat property-level lease list</h4>
+              </div>
+            </div>
+            <div className="mt-5 space-y-5">
+              {loading ? (
+                <p className="rounded-2xl border border-slate-200 p-6 text-sm text-steel">Loading leases...</p>
+              ) : visiblePropertyGroups.length === 0 ? (
+                <div className="rounded-2xl bg-cloud p-6 text-sm text-steel">No leases matched the current search and filters.</div>
+              ) : (
+                visiblePropertyGroups.map((group) => {
+                  const collapsed = collapsedProperties[group.propertyId] ?? false;
+                  return (
+                    <article key={group.propertyId} id={`lease-property-${group.propertyId}`} className="scroll-mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white">
+                      <div className="border-b border-slate-200 bg-white/95 px-4 py-4 backdrop-blur lg:sticky lg:top-0 lg:z-10 sm:px-5">
+                        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                          <button
+                            type="button"
+                            onClick={() => setCollapsedProperties((current) => ({ ...current, [group.propertyId]: !collapsed }))}
+                            className="min-w-0 text-left"
+                          >
+                            <p className="text-xs uppercase tracking-[0.2em] text-steel">{collapsed ? "Expand" : "Collapse"} Property</p>
+                            <h5 className="mt-1 break-words text-lg font-semibold text-ink">{group.propertyName}</h5>
+                          </button>
+                          <div className="grid w-full min-w-0 grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-7">
+                            <PropertyStat label="Units" value={String(group.totalUnits)} />
+                            <PropertyStat label="Occupied" value={String(group.occupied)} />
+                            <PropertyStat label="Vacant" value={String(group.vacant)} />
+                            <PropertyStat label="Active" value={String(group.activeLeases)} />
+                            <PropertyStat label="Expiring" value={String(group.expiringSoon)} />
+                            <PropertyStat label="Renewals" value={String(group.pendingRenewals)} />
+                            <PropertyStat label="Rent" value={formatMoney(group.totalRent, group.currency)} />
+                          </div>
+                        </div>
+                      </div>
+                      {collapsed ? null : (
+                        <div className="grid gap-4 bg-slate-50/60 p-3 sm:p-4 lg:p-5">
+                          {group.leases.map((lease, index) => (
+                            <LeaseHierarchyRow key={lease.id} lease={lease} zebra={index % 2 === 1} onAction={handleLeaseAction} onEdit={openEditLease} />
+                          ))}
+                        </div>
+                      )}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+            <div className="mt-5 flex flex-col gap-3 text-sm text-steel sm:flex-row sm:items-center sm:justify-between">
+              <span>Page {page} · {total} total leases</span>
+              <div className="flex gap-2">
+                <button type="button" disabled={page === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50">
+                  Previous
+                </button>
+                <button type="button" disabled={page * 8 >= total} onClick={() => setPage((value) => value + 1)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50">
+                  Next
+                </button>
+              </div>
+            </div>
+            </section>
           </div>
         </section>
 
@@ -1460,7 +1661,8 @@ function LeaseFormModal({
                 value={selectedPropertyId}
                 options={filteredPropertyOptions}
                 onChange={(value) => {
-                  onFormChange((current) => ({ ...current, propertyId: value, towerId: "", unitId: "" }));
+                  const propertyUnit = availableUnits.find((unit) => String(unit.propertyId) === value);
+                  onFormChange((current) => ({ ...current, propertyId: value, towerId: "", unitId: "", currency: propertyUnit?.currency ?? current.currency }));
                   onSearchUnits({ propertyId: value });
                 }}
                 required
@@ -1498,6 +1700,10 @@ function LeaseFormModal({
                   }
                 }}
               />
+              <InputField label="Fit-Out Start" type="date" value={form.fitOutPeriodStart} onChange={(value) => onFormChange((current) => ({ ...current, fitOutPeriodStart: value }))} />
+              <InputField label="Fit-Out End" type="date" value={form.fitOutPeriodEnd} onChange={(value) => onFormChange((current) => ({ ...current, fitOutPeriodEnd: value }))} />
+              <InputField label="Free Period Start" type="date" value={form.freePeriodStart} onChange={(value) => onFormChange((current) => ({ ...current, freePeriodStart: value }))} />
+              <InputField label="Free Period End" type="date" value={form.freePeriodEnd} onChange={(value) => onFormChange((current) => ({ ...current, freePeriodEnd: value }))} />
               <InputField label="Rent Amount" type="number" value={form.rentAmount} onChange={(value) => onFormChange((current) => ({ ...current, rentAmount: value }))} />
               <InputField label="Security Deposit" type="number" value={form.securityDeposit} onChange={(value) => onFormChange((current) => ({ ...current, securityDeposit: value }))} />
               <InputField label="Currency" value={form.currency} onChange={(value) => onFormChange((current) => ({ ...current, currency: value }))} required />
@@ -1578,10 +1784,6 @@ function LeaseFormModal({
           ) : null}
           {formTab === "fitout" ? (
             <div className="grid gap-4 md:grid-cols-2">
-              <InputField label="Free Period Start" type="date" value={form.freePeriodStart} onChange={(value) => onFormChange((current) => ({ ...current, freePeriodStart: value }))} />
-              <InputField label="Free Period End" type="date" value={form.freePeriodEnd} onChange={(value) => onFormChange((current) => ({ ...current, freePeriodEnd: value }))} />
-              <InputField label="Fit-Out Start" type="date" value={form.fitOutPeriodStart} onChange={(value) => onFormChange((current) => ({ ...current, fitOutPeriodStart: value }))} />
-              <InputField label="Fit-Out End" type="date" value={form.fitOutPeriodEnd} onChange={(value) => onFormChange((current) => ({ ...current, fitOutPeriodEnd: value }))} />
               <SelectField label="Approval Status" value={form.approvalStatus} options={toOptions(approvalOptions)} onChange={(value) => onFormChange((current) => ({ ...current, approvalStatus: value }))} required />
               <SelectField label="Document Status" value={form.documentStatus} options={toOptions(documentOptions)} onChange={(value) => onFormChange((current) => ({ ...current, documentStatus: value }))} required />
               <label className="md:col-span-2 block text-sm text-ink">
@@ -1798,6 +2000,217 @@ function TransactionModal({
   );
 }
 
+export function UnitAvailabilityWorkspacePage() {
+  const [records, setRecords] = useState<UnitAvailabilityRecord[]>([]);
+  const [properties, setProperties] = useState<PropertyRecord[]>([]);
+  const [towers, setTowers] = useState<TowerOption[]>([]);
+  const [filters, setFilters] = useState({
+    propertyId: "",
+    towerId: "",
+    unitSearch: "",
+    occupancyStatus: "",
+    availabilityPeriod: "",
+    leasePeriod: "",
+    dateFrom: new Date().toISOString().slice(0, 10),
+    dateTo: ""
+  });
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const towerOptions = useMemo(
+    () => towers.filter((tower) => !filters.propertyId || String(tower.propertyId) === filters.propertyId),
+    [filters.propertyId, towers]
+  );
+
+  const queryString = useMemo(() => {
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("size", "12");
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value.trim()) {
+        params.set(key, value.trim());
+      }
+    });
+    return params.toString();
+  }, [filters, page]);
+
+  async function loadAvailability() {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await apiGet<PagedResult<UnitAvailabilityRecord>>(`/leases/unit-availability?${queryString}`);
+      setRecords(result.items);
+      setTotal(result.total);
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : "Failed to load unit availability");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadAvailability();
+  }, [queryString]);
+
+  useEffect(() => {
+    void Promise.all([
+      apiGet<PagedResult<PropertyRecord>>("/properties?size=100"),
+      apiGet<PagedResult<TowerOption>>("/towers?size=100")
+    ]).then(([propertyData, towerData]) => {
+      setProperties(propertyData.items);
+      setTowers(towerData.items);
+    }).catch((requestError) => {
+      setError(requestError instanceof Error ? requestError.message : "Failed to load filters");
+    });
+  }, []);
+
+  const summary = useMemo(() => {
+    const occupied = records.filter((record) => record.currentOccupancyStatus === "OCCUPIED").length;
+    const vacant = records.filter((record) => record.currentOccupancyStatus === "VACANT").length;
+    const reserved = records.filter((record) => record.currentOccupancyStatus === "RESERVED" || record.timelineStatus === "RESERVED").length;
+    const availableNow = records.filter((record) => record.timelineStatus === "AVAILABLE").length;
+    return { occupied, vacant, reserved, availableNow };
+  }, [records]);
+
+  function updateFilter(name: keyof typeof filters, value: string) {
+    setPage(1);
+    setFilters((current) => ({
+      ...current,
+      [name]: value,
+      ...(name === "propertyId" ? { towerId: "" } : {})
+    }));
+  }
+
+  return (
+    <AppShell title="Unit Availability Workspace" subtitle="Search current and future unit availability by property, tower, unit, occupancy, and lease period.">
+      <div className="space-y-6">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Available Now" value={String(summary.availableNow)} note="No active block" tone="accent" />
+          <MetricCard label="Occupied Units" value={String(summary.occupied)} note="Inventory source" tone="neutral" />
+          <MetricCard label="Vacant Units" value={String(summary.vacant)} note="Inventory status" tone="warn" />
+          <MetricCard label="Reserved Units" value={String(summary.reserved)} note="Reserved status" tone="neutral" />
+        </section>
+
+        <section className="rounded-[24px] border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <select value={filters.propertyId} onChange={(event) => updateFilter("propertyId", event.target.value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+              <option value="">All Properties</option>
+              {properties.map((property) => <option key={property.id} value={property.id}>{property.propertyName}</option>)}
+            </select>
+            <select value={filters.towerId} onChange={(event) => updateFilter("towerId", event.target.value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+              <option value="">All Buildings / Towers</option>
+              {towerOptions.map((tower) => <option key={tower.id} value={tower.id}>{tower.towerName}</option>)}
+            </select>
+            <input value={filters.unitSearch} onChange={(event) => updateFilter("unitSearch", event.target.value)} placeholder="Search unit" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" />
+            <select value={filters.occupancyStatus} onChange={(event) => updateFilter("occupancyStatus", event.target.value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+              <option value="">All Occupancy Statuses</option>
+              {occupancyOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+            <select value={filters.availabilityPeriod} onChange={(event) => updateFilter("availabilityPeriod", event.target.value)} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent">
+              <option value="">Any Availability</option>
+              <option value="AVAILABLE">Available in Date Range</option>
+              <option value="UNAVAILABLE">Unavailable in Date Range</option>
+            </select>
+            <input value={filters.leasePeriod} onChange={(event) => updateFilter("leasePeriod", event.target.value)} type="date" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" aria-label="Lease period date" />
+            <input value={filters.dateFrom} onChange={(event) => updateFilter("dateFrom", event.target.value)} type="date" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" aria-label="Available from" />
+            <input value={filters.dateTo} onChange={(event) => updateFilter("dateTo", event.target.value)} type="date" className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm outline-none focus:border-accent" aria-label="Available to" />
+          </div>
+          {error ? <p className="mt-4 rounded-2xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</p> : null}
+        </section>
+
+        <section className="space-y-4">
+          {loading ? (
+            <p className="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-steel">Loading unit availability...</p>
+          ) : records.length === 0 ? (
+            <div className="rounded-2xl bg-cloud p-6 text-sm text-steel">No units matched the current filters.</div>
+          ) : records.map((record) => (
+            <UnitAvailabilityCard key={record.unitId} record={record} />
+          ))}
+        </section>
+
+        <div className="flex flex-col gap-3 text-sm text-steel sm:flex-row sm:items-center sm:justify-between">
+          <span>Page {page} · {total} total units</span>
+          <div className="flex gap-2">
+            <button type="button" disabled={page === 1} onClick={() => setPage((value) => Math.max(1, value - 1))} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50">
+              Previous
+            </button>
+            <button type="button" disabled={page * 12 >= total} onClick={() => setPage((value) => value + 1)} className="rounded-xl border border-slate-200 bg-white px-3 py-2 disabled:opacity-50">
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </AppShell>
+  );
+}
+
+function UnitAvailabilityCard({ record }: Readonly<{ record: UnitAvailabilityRecord }>) {
+  return (
+    <article className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex flex-col gap-3 border-b border-slate-100 p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="text-lg font-semibold text-ink">{record.unitNumber}</h3>
+            <Badge label={record.currentOccupancyStatus} />
+            <Badge label={record.timelineStatus} />
+          </div>
+          <p className="mt-1 text-sm text-steel">{record.propertyName} · {record.towerName} · {record.unitType} · {record.area.toLocaleString()} {record.areaUnit}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-xs sm:min-w-72">
+          <SummaryValue label="Available From" value={normalizeDate(record.availableFrom)} />
+          <SummaryValue label="Available To" value={normalizeDate(record.availableTo)} />
+        </div>
+      </div>
+      <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1.2fr)_minmax(280px,0.8fr)]">
+        <div className="min-w-0">
+          <AvailabilityTimeline record={record} />
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <InfoBlock label="Current Lease Period" primary={record.currentLeasePeriod || "-"} secondary={`Tenant ${record.tenantDetails || "-"}`} />
+            <InfoBlock label="Future Reserved / Leased Periods" primary={record.futurePeriods || "-"} secondary="Includes reservations and future leases when present" />
+          </div>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+          <InfoBlock label="Fit-Out Period" primary={record.fitOutPeriod || "-"} secondary="Blocks availability before lease start" />
+          <InfoBlock label="Free Period" primary={record.freePeriod || "-"} secondary="Included inside lease duration" />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function AvailabilityTimeline({ record }: Readonly<{ record: UnitAvailabilityRecord }>) {
+  const hasFitOut = Boolean(record.fitOutStart);
+  const hasLease = Boolean(record.currentLeaseStart);
+  const hasFree = Boolean(record.freePeriodStart);
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+      <div className="grid min-h-14 overflow-hidden rounded-xl border border-slate-200 bg-white sm:grid-cols-4">
+        <TimelineSegment active={hasFitOut} label="Fit-Out" value={hasFitOut ? `${record.fitOutStart} to ${normalizeDate(record.fitOutEnd)}` : "Not defined"} tone="warn" />
+        <TimelineSegment active={hasLease} label="Lease Start" value={hasLease ? normalizeDate(record.currentLeaseStart) : "No active lease"} tone="accent" />
+        <TimelineSegment active={hasFree} label="Free Period" value={hasFree ? `${record.freePeriodStart} to ${normalizeDate(record.freePeriodEnd)}` : "Included when defined"} tone="neutral" />
+        <TimelineSegment active={hasLease} label="Lease End" value={hasLease ? normalizeDate(record.currentLeaseEnd) : normalizeDate(record.availableFrom)} tone="danger" />
+      </div>
+    </div>
+  );
+}
+
+function TimelineSegment({ active, label, value, tone }: Readonly<{ active: boolean; label: string; value: string; tone: "accent" | "warn" | "neutral" | "danger" }>) {
+  const toneClass = {
+    accent: "border-blue-200 bg-blue-50 text-blue-800",
+    warn: "border-amber-200 bg-amber-50 text-amber-800",
+    neutral: "border-slate-200 bg-white text-slate-700",
+    danger: "border-rose-200 bg-rose-50 text-rose-800"
+  }[tone];
+  return (
+    <div className={`border-b p-3 sm:border-b-0 sm:border-r sm:last:border-r-0 ${active ? toneClass : "border-slate-100 bg-slate-50 text-steel"}`}>
+      <p className="text-xs font-semibold uppercase tracking-[0.14em]">{label}</p>
+      <p className="mt-1 break-words text-sm font-medium">{value}</p>
+    </div>
+  );
+}
+
 function InputField({
   label,
   type = "text",
@@ -1981,6 +2394,151 @@ function HistoryTable({
             </article>
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+function PropertyStat({ label, value }: Readonly<{ label: string; value: string }>) {
+  return (
+    <div className="min-w-0 rounded-xl bg-slate-50 px-3 py-2.5">
+      <p className="text-[10px] uppercase tracking-[0.16em] text-steel">{label}</p>
+      <p className="mt-1 break-words font-semibold text-ink">{value}</p>
+    </div>
+  );
+}
+
+function LeaseHierarchyRow({
+  lease,
+  zebra,
+  onAction,
+  onEdit
+}: Readonly<{
+  lease: LeaseRecord;
+  zebra: boolean;
+  onAction: (action: string, lease: LeaseRecord) => void;
+  onEdit: (lease: LeaseRecord) => void;
+}>) {
+  const lifecycleActions = [
+    { label: "Renewal", action: "Renew Lease", value: lease.renewalStatus },
+    { label: "Amendment", action: "Amend Lease", value: lease.latestTransactionType === "AMENDMENT" ? "ACTIVE" : "Available" },
+    { label: "Extension", action: "Extend Lease", value: lease.latestTransactionType === "EXTENSION" ? "ACTIVE" : "Available" },
+    { label: "Rent Revision", action: "Revise Rent", value: lease.latestTransactionType === "RENT_REVISION" ? "ACTIVE" : "Available" },
+    { label: "Suspension", action: "Suspend Lease", value: lease.leaseStatus === "SUSPENDED" ? "ACTIVE" : "Available" },
+    { label: "Termination", action: "Terminate Lease", value: lease.leaseStatus === "TERMINATION_REVIEW" ? "ACTIVE" : "Available" },
+    { label: "Cancellation", action: "Cancel Lease", value: lease.leaseStatus === "CANCELLED" ? "ACTIVE" : "Available" },
+    { label: "Transfer", action: "Lease Transfer", value: lease.latestTransactionType === "TRANSFER" ? "ACTIVE" : "Available" }
+  ];
+  const menuActions = [
+    "View Lease 360",
+    "Edit Lease",
+    "Renew Lease",
+    "Extend Lease",
+    "Amend Lease",
+    "Revise Rent",
+    "Suspend Lease",
+    "Terminate Lease",
+    "Cancel Lease",
+    "Lease Transfer",
+    "View History",
+    "View Documents",
+    "View Audit Trail"
+  ];
+
+  return (
+    <article className={`rounded-2xl border border-slate-200 p-4 shadow-sm transition hover:border-blue-200 hover:shadow-md sm:p-5 ${zebra ? "bg-slate-50/80" : "bg-white"}`}>
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <Link href={`/leases/${lease.id}`} className="break-words text-lg font-semibold text-ink hover:text-accent">
+                {lease.leaseNumber}
+              </Link>
+              <Badge label={lease.leaseStatus} />
+              <Badge label={lease.occupancyStatus} />
+            </div>
+            <p className="mt-1 text-xs text-steel">Parent: {lease.parentLeaseReference ?? "Master Lease"} · v{lease.versionNumber}</p>
+          </div>
+          <details className="relative w-full sm:w-auto">
+            <summary className="flex w-full cursor-pointer list-none items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-ink shadow-sm hover:bg-cloud sm:w-auto">
+              More Actions
+            </summary>
+            <div className="absolute left-0 right-auto z-20 mt-2 grid w-full max-w-[calc(100vw-2rem)] gap-1 rounded-2xl border border-slate-200 bg-white p-2 shadow-card sm:left-auto sm:right-0 sm:w-60">
+              {menuActions.map((label) => (
+                <button
+                  key={label}
+                  type="button"
+                  onClick={() => {
+                    if (label === "Edit Lease") {
+                      onEdit(lease);
+                    } else {
+                      onAction(label, lease);
+                    }
+                  }}
+                  className="rounded-xl px-3 py-2 text-left text-xs font-medium text-ink hover:bg-cloud"
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </details>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-3">
+          <InfoBlock label="Tenant / Unit" primary={lease.customerName} secondary={`${lease.unitCode} · ${lease.towerName}`} />
+          <InfoBlock label="Lease Period" primary={`${lease.startDate} to ${lease.endDate}`} secondary={`${Math.max(daysTo(lease.endDate), 0)} days remaining`} />
+          <InfoBlock label="Rent" primary={formatMoney(leaseRent(lease), lease.currency)} secondary={`Deposit ${formatMoney(lease.securityDeposit, lease.currency)}`} />
+        </div>
+
+        <details className="rounded-2xl border border-slate-200 bg-white">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-ink">
+            <span>Lifecycle Actions</span>
+            <span className="text-xs font-medium text-steel">{transactionTitle(lease.latestTransactionType || "LEASE")}</span>
+          </summary>
+          <div className="border-t border-slate-100 p-4">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              {lifecycleActions.map((item) => (
+                <button
+                  key={item.label}
+                  type="button"
+                  onClick={() => onAction(item.action, lease)}
+                  className="rounded-2xl border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-blue-200 hover:bg-blue-50/50"
+                >
+                  <p className="text-sm font-semibold text-ink">{item.label}</p>
+                  <p className="mt-1 text-xs text-steel">{item.value}</p>
+                </button>
+              ))}
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <TimelineNode title="Master Lease" detail={`${lease.leaseNumber} · ${lease.leaseType}`} status={lease.leaseStatus} />
+              <TimelineNode title="Renewal" detail={lease.renewalStatus} status={lease.renewalStatus} />
+              <TimelineNode title="Approval" detail={lease.approvalStatus} status={lease.approvalStatus} />
+              <TimelineNode title="Latest Action" detail={transactionTitle(lease.latestTransactionType || "LEASE")} status={lease.latestTransactionType || "LEASE"} />
+            </div>
+          </div>
+        </details>
+      </div>
+    </article>
+  );
+}
+
+function InfoBlock({ label, primary, secondary }: Readonly<{ label: string; primary: string; secondary: string }>) {
+  return (
+    <div className="rounded-2xl bg-slate-50 p-3">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-steel">{label}</p>
+      <p className="mt-2 break-words text-sm font-semibold text-ink">{primary}</p>
+      <p className="mt-1 break-words text-xs text-steel">{secondary}</p>
+    </div>
+  );
+}
+
+function TimelineNode({ title, detail, status }: Readonly<{ title: string; detail: string; status: string }>) {
+  return (
+    <div className="rounded-2xl border border-slate-200 bg-white p-3 text-sm">
+      <p className="font-semibold text-ink">{title}</p>
+      <p className="mt-1 text-xs text-steel">{detail}</p>
+      <div className="mt-3">
+        <Badge label={status} />
       </div>
     </div>
   );

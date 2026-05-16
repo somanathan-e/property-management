@@ -9,6 +9,7 @@ import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
 import com.eba.lease.dto.LeaseUpsertDto;
 import com.eba.lease.dto.LeaseUnitUpsertDto;
+import com.eba.lease.dto.UnitAvailabilityDto;
 import com.eba.lease.mappers.LeaseMapper;
 import com.eba.lease.service.LeaseService;
 import jakarta.ws.rs.core.Response;
@@ -53,10 +54,13 @@ public class LeaseServiceImpl implements LeaseService {
         validate(request);
         try (SqlSession session = DatabaseConfig.sqlSessionFactory().openSession(true)) {
             LeaseMapper mapper = session.getMapper(LeaseMapper.class);
+            ensureUniqueLeaseNumber(mapper, request.leaseNumber(), null);
             ensureNoActiveLeaseConflict(mapper, request, null);
             mapper.insert(request);
             LeaseDto lease = mapper.findByLeaseNumber(request.leaseNumber());
-            insertLeaseUnits(mapper, lease.id(), normalizedUnits(request));
+            List<LeaseUnitUpsertDto> units = normalizedUnits(request);
+            insertLeaseUnits(mapper, lease.id(), units);
+            updateUnitOccupancy(mapper, units, request.occupancyStatus());
             return mapper.findById(lease.id());
         }
     }
@@ -66,12 +70,15 @@ public class LeaseServiceImpl implements LeaseService {
         validate(request);
         try (SqlSession session = DatabaseConfig.sqlSessionFactory().openSession(true)) {
             LeaseMapper mapper = session.getMapper(LeaseMapper.class);
+            ensureUniqueLeaseNumber(mapper, request.leaseNumber(), id);
             ensureNoActiveLeaseConflict(mapper, request, id);
             if (mapper.update(id, request) == 0) {
                 throw new AppException(Response.Status.NOT_FOUND, "Lease not found");
             }
             mapper.deleteLeaseUnits(id);
-            insertLeaseUnits(mapper, id, normalizedUnits(request));
+            List<LeaseUnitUpsertDto> units = normalizedUnits(request);
+            insertLeaseUnits(mapper, id, units);
+            updateUnitOccupancy(mapper, units, request.occupancyStatus());
             return mapper.findById(id);
         }
     }
@@ -120,6 +127,20 @@ public class LeaseServiceImpl implements LeaseService {
         }
     }
 
+    @Override
+    public PagedResult<UnitAvailabilityDto> getUnitAvailability(Long propertyId, Long towerId, String unitSearch, String occupancyStatus, String availabilityPeriod, String leasePeriod, String dateFrom, String dateTo, Integer page, Integer size) {
+        PageQuery query = PageQuery.of(unitSearch, page, size);
+        try (SqlSession session = DatabaseConfig.sqlSessionFactory().openSession()) {
+            LeaseMapper mapper = session.getMapper(LeaseMapper.class);
+            return new PagedResult<>(
+                mapper.findUnitAvailability(propertyId, towerId, query.search(), normalize(occupancyStatus), normalize(availabilityPeriod), normalize(leasePeriod), normalize(dateFrom), normalize(dateTo), query.size(), query.offset()),
+                query.page(),
+                query.size(),
+                mapper.countUnitAvailability(propertyId, towerId, query.search(), normalize(occupancyStatus), normalize(availabilityPeriod), normalize(leasePeriod), normalize(dateFrom), normalize(dateTo))
+            );
+        }
+    }
+
     private void validate(LeaseUpsertDto request) {
         if (request == null || request.leaseNumber() == null || request.leaseNumber().isBlank()) {
             throw new AppException(Response.Status.BAD_REQUEST, "Lease number is required");
@@ -157,6 +178,21 @@ public class LeaseServiceImpl implements LeaseService {
         if (request.rentAmount() < 0 || request.securityDeposit() < 0) {
             throw new AppException(Response.Status.BAD_REQUEST, "Rent and security deposit cannot be negative");
         }
+        if (isAfter(request.fitOutPeriodStart(), request.startDate())) {
+            throw new AppException(Response.Status.BAD_REQUEST, "Fit-out start must be before or on lease start date");
+        }
+        if (isAfter(request.fitOutPeriodEnd(), request.startDate())) {
+            throw new AppException(Response.Status.BAD_REQUEST, "Fit-out end must be before or on lease start date");
+        }
+        if (isAfter(request.fitOutPeriodStart(), request.fitOutPeriodEnd())) {
+            throw new AppException(Response.Status.BAD_REQUEST, "Fit-out start cannot be after fit-out end");
+        }
+        if (isAfter(request.freePeriodStart(), request.freePeriodEnd())) {
+            throw new AppException(Response.Status.BAD_REQUEST, "Free period start cannot be after free period end");
+        }
+        if (isBefore(request.freePeriodStart(), request.startDate()) || isAfter(request.freePeriodStart(), request.endDate()) || isBefore(request.freePeriodEnd(), request.startDate()) || isAfter(request.freePeriodEnd(), request.endDate())) {
+            throw new AppException(Response.Status.BAD_REQUEST, "Free period must be within the lease duration");
+        }
     }
 
     private void validateTransaction(LeaseTransactionCreateDto request) {
@@ -183,8 +219,16 @@ public class LeaseServiceImpl implements LeaseService {
         return lease;
     }
 
+    private void ensureUniqueLeaseNumber(LeaseMapper mapper, String leaseNumber, Long currentLeaseId) {
+        LeaseDto existingLease = mapper.findByLeaseNumber(leaseNumber);
+        if (existingLease != null && (currentLeaseId == null || !existingLease.id().equals(currentLeaseId))) {
+            throw new AppException(Response.Status.CONFLICT, "Lease number already exists");
+        }
+    }
+
     private void ensureNoActiveLeaseConflict(LeaseMapper mapper, LeaseUpsertDto request, Long excludeId) {
         Set<Long> selectedUnitIds = new HashSet<>();
+        String effectiveStartDate = effectiveAvailabilityStart(request);
         for (LeaseUnitUpsertDto unit : normalizedUnits(request)) {
             if (unit.unitId() == null || !selectedUnitIds.add(unit.unitId())) {
                 throw new AppException(Response.Status.CONFLICT, "Duplicate units are not allowed in the same lease");
@@ -192,10 +236,10 @@ public class LeaseServiceImpl implements LeaseService {
             if (excludeId == null && mapper.countUnavailableUnit(unit.unitId()) > 0) {
                 throw new AppException(Response.Status.CONFLICT, "Inactive, occupied, or reserved units cannot be leased");
             }
-            if (mapper.countActiveReservationConflict(unit.unitId(), request.startDate(), request.endDate()) > 0) {
+            if (mapper.countActiveReservationConflict(unit.unitId(), effectiveStartDate, request.endDate()) > 0) {
                 throw new AppException(Response.Status.CONFLICT, "Unit already has an active reservation for the requested lease term");
             }
-            if (mapper.countActiveLeaseConflict(unit.unitId(), request.startDate(), request.endDate(), excludeId) > 0) {
+            if (mapper.countActiveLeaseConflict(unit.unitId(), request.startDate(), effectiveStartDate, request.endDate(), excludeId) > 0) {
                 throw new AppException(Response.Status.CONFLICT, "Unit already has an active lease for the requested lease term");
             }
         }
@@ -223,6 +267,40 @@ public class LeaseServiceImpl implements LeaseService {
         for (LeaseUnitUpsertDto unit : units) {
             mapper.insertLeaseUnit(leaseId, unit.propertyId(), unit.unitId(), unit.unitNumber(), unit.area(), unit.rent(), unit.additionalCharges(), unit.deposit(), unit.tax(), unit.fitOutPeriod(), unit.unitLeaseStatus());
         }
+    }
+
+    private void updateUnitOccupancy(LeaseMapper mapper, List<LeaseUnitUpsertDto> units, String occupancyStatus) {
+        String normalizedStatus = normalize(occupancyStatus);
+        if (normalizedStatus == null || normalizedStatus.isBlank()) {
+            return;
+        }
+        for (LeaseUnitUpsertDto unit : units) {
+            mapper.updateUnitOccupancy(unit.unitId(), normalizedStatus);
+        }
+    }
+
+    private String effectiveAvailabilityStart(LeaseUpsertDto request) {
+        String fitOutStart = normalizeOptionalDate(request.fitOutPeriodStart());
+        return fitOutStart == null ? request.startDate() : fitOutStart;
+    }
+
+    private boolean isAfter(String left, String right) {
+        String normalizedLeft = normalizeOptionalDate(left);
+        String normalizedRight = normalizeOptionalDate(right);
+        return normalizedLeft != null && normalizedRight != null && normalizedLeft.compareTo(normalizedRight) > 0;
+    }
+
+    private boolean isBefore(String left, String right) {
+        String normalizedLeft = normalizeOptionalDate(left);
+        String normalizedRight = normalizeOptionalDate(right);
+        return normalizedLeft != null && normalizedRight != null && normalizedLeft.compareTo(normalizedRight) < 0;
+    }
+
+    private String normalizeOptionalDate(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private boolean requiresVersionBump(String transactionType) {

@@ -5,6 +5,7 @@ import com.eba.lease.dto.LeaseDto;
 import com.eba.lease.dto.LeaseTransactionCreateDto;
 import com.eba.lease.dto.LeaseTransactionDto;
 import com.eba.lease.dto.LeaseUpsertDto;
+import com.eba.lease.dto.UnitAvailabilityDto;
 import java.util.List;
 
 public interface LeaseService {
@@ -21,4 +22,6 @@ public interface LeaseService {
     List<LeaseTransactionDto> getLeaseTransactions(Long leaseId);
 
     LeaseTransactionDto createLeaseTransaction(Long leaseId, LeaseTransactionCreateDto request);
+
+    PagedResult<UnitAvailabilityDto> getUnitAvailability(Long propertyId, Long towerId, String unitSearch, String occupancyStatus, String availabilityPeriod, String leasePeriod, String dateFrom, String dateTo, Integer page, Integer size);
 }
